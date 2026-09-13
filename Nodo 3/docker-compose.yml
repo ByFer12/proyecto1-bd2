@@ -1,0 +1,26 @@
+services:
+  mysql-nodo3:
+    image: mysql:8.4
+    container_name: mysql-nodo3
+    restart: unless-stopped
+    hostname: mysql-nodo3
+    env_file:
+      - .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    ports:
+      - "3306:3306"   
+      - "33061:33061"  
+    volumes:
+      - ./my.cnf:/tmp/nodo3.cnf:ro
+      - datos_nodo3:/var/lib/mysql
+    entrypoint:
+      - bash
+      - -c
+      - |
+        cp /tmp/nodo3.cnf /etc/mysql/conf.d/nodo3.cnf
+        chmod 644 /etc/mysql/conf.d/nodo3.cnf
+        exec docker-entrypoint.sh mysqld
+
+volumes:
+  datos_nodo3:

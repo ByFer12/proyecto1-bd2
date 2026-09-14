@@ -27,6 +27,16 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    networks:
+      red_tailscale:
+        ipv4_address: 100.107.61.57
 
 volumes:
   datos_nodo3:
+
+networks:
+  red_tailscale:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 100.107.61.0/24

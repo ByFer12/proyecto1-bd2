@@ -8,11 +8,12 @@ services:
       - .env
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: data_bugs
     ports:
       - "3306:3306"   
       - "33061:33061"  
     volumes:
-      - ./my.cnf:/tmp/nodo3.cnf:ro
+      - ./conf/my.cnf:/tmp/nodo3.cnf:ro
       - datos_nodo3:/var/lib/mysql
     entrypoint:
       - bash
@@ -21,6 +22,11 @@ services:
         cp /tmp/nodo3.cnf /etc/mysql/conf.d/nodo3.cnf
         chmod 644 /etc/mysql/conf.d/nodo3.cnf
         exec docker-entrypoint.sh mysqld
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 volumes:
   datos_nodo3:

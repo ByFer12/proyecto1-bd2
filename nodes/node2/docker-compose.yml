@@ -3,19 +3,11 @@ services:
     image: mysql:8.4
     container_name: mysql-node2
     restart: always
+    network_mode: host
     env_file:
       - .env
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-    ports:
-      - "3306:3306"
-      - "33061:33061"
     volumes:
       - ./data:/var/lib/mysql
       - ./conf/my.cnf:/etc/mysql/conf.d/my.cnf
-    networks:
-      - red-proyecto
-
-networks:
-  red-proyecto:
-    driver: bridge

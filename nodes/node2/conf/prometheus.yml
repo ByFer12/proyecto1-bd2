@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'node2-mysql'
+    static_configs:
+      - targets: ['localhost:3306']

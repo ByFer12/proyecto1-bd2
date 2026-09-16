@@ -11,3 +11,11 @@ services:
     volumes:
       - ./data:/var/lib/mysql
       - ./conf/my.cnf:/etc/mysql/conf.d/my.cnf
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus-node2
+    restart: always
+    network_mode: host
+    volumes:
+      - ./conf/prometheus.yml:/etc/prometheus/prometheus.yml

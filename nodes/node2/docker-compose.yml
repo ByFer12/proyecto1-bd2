@@ -1,17 +1,45 @@
 services:
+  tailscale-node2:
+    image: tailscale/tailscale:latest
+    container_name: tailscale-node2
+    hostname: mysql-node2
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_AUTH_ONCE: "true"
+      TS_HOSTNAME: mysql-node2
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3306:3306"
+      - "33061:33061"
+    volumes:
+      - tailscale_node2_state:/var/lib/tailscale
+
   mysql-node2:
     image: mysql:8.4
     container_name: mysql-node2
     restart: always
-    network_mode: host
+    depends_on:
+      - tailscale-node2
     env_file:
       - .env
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    network_mode: "service:tailscale-node2"
     volumes:
-      - ./data:/var/lib/mysql
-      - ./conf/my.cnf:/etc/mysql/conf.d/my.cnf
-
+      - mysql_node2_data:/var/lib/mysql
+      - ./conf/my.cnf:/etc/mysql/conf.d/my.cnf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus-node2
@@ -19,3 +47,7 @@ services:
     network_mode: host
     volumes:
       - ./conf/prometheus.yml:/etc/prometheus/prometheus.yml
+
+volumes:
+  mysql_node2_data:
+  tailscale_node2_state:

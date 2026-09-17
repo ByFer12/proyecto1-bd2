@@ -1,0 +1,50 @@
+services:
+  mysqld-exporter-nodo3:
+    image: prom/mysqld-exporter:v0.15.1
+    container_name: mysqld-exporter-nodo3
+    restart: unless-stopped
+    command:
+      - "--config.my-cnf=/etc/mysqld_exporter/.my.cnf"
+      - "--mysqld.address=host.docker.internal:3306"
+      - "--no-collect.slave_status"
+    volumes:
+      - ./conf/.my.cnf:/etc/mysqld_exporter/.my.cnf:ro
+    ports:
+      - "9104:9104"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.1
+    container_name: node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  prometheus_data:
+  grafana_data:

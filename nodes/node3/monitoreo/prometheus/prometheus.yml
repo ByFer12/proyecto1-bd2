@@ -1,0 +1,44 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: "mysql-nodes"
+    static_configs:
+      # Nodo 3 (Carlos - local)
+      - targets: ["mysqld-exporter-nodo3:9104"]
+        labels:
+          nodo: "nodo3"
+          integrante: "Carlos"
+      # Nodo 2 (Michael - Tailscale)
+      - targets: ["100.109.4.122:9104"]
+        labels:
+          nodo: "nodo2"
+          integrante: "Michael"
+      # Nodo 1 (Byron - Tailscale)
+      - targets: ["100.113.38.39:9104"]
+        labels:
+          nodo: "nodo1"
+          integrante: "Byron"
+
+  - job_name: "node-system"
+    static_configs:
+      # Nodo 3 (Carlos - local)
+      - targets: ["node-exporter:9100"]
+        labels:
+          nodo: "nodo3"
+          integrante: "Carlos"
+      # Nodo 2 (Michael - Tailscale)
+      - targets: ["100.109.4.122:9100"]
+        labels:
+          nodo: "nodo2"
+          integrante: "Michael"
+      # Nodo 1 (Byron - Tailscale)
+      - targets: ["100.113.38.39:9100"]
+        labels:
+          nodo: "nodo1"
+          integrante: "Byron"

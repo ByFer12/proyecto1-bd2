@@ -15,7 +15,7 @@ scrape_configs:
           nodo: "nodo3"
           integrante: "Carlos"
       # Nodo 2 (Michael - Tailscale)
-      - targets: ["100.109.4.122:9104"]
+      - targets: ["100.126.57.24:9104"]
         labels:
           nodo: "nodo2"
           integrante: "Michael"
@@ -33,7 +33,7 @@ scrape_configs:
           nodo: "nodo3"
           integrante: "Carlos"
       # Nodo 2 (Michael - Tailscale)
-      - targets: ["100.109.4.122:9100"]
+      - targets: ["100.126.57.24:9100"]
         labels:
           nodo: "nodo2"
           integrante: "Michael"

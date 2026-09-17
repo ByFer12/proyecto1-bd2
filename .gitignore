@@ -1,5 +1,6 @@
 *.env
 /nodes/node2/.env
+/nodes/node2/data/
 
 # Enunciado y guias de trabajo del proyecto
 /Plan_Proyecto1_Bases2_Grupo4.md

@@ -90,7 +90,7 @@ WHERE correo='fase3.antes@example.com';
 "
 ```
 
-La contraseña de `app_user` se introduce en el prompt y no se escribe en el
+La contraseña de `app_user` que es `1e36ef73c4155f18823d67fa16fe096a82dd7c193e73602d` se introduce en el prompt y no se escribe en el
 comando ni en la captura.
 
 Sirve para: crear una marca previa a la falla que deberá seguir disponible y

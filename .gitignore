@@ -1,4 +1,5 @@
 *.env
+**/.my.cnf
 /nodes/node2/.env
 /nodes/node2/data/
 /proxy/conf/proxysql.cnf

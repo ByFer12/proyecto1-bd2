@@ -10,6 +10,11 @@ procedimiento.
 | 3 | [Fallo de nodo1](./fase3.md) | Guía preparada, no ejecutada |
 | 4 | [Fallo de nodo2](./fase4.md) | Guía preparada, no ejecutada |
 | 5 | [Fallo múltiple](./fase5.md) | Guía preparada, no ejecutada |
+| 6 | [Pruebas de carga](./fase6.md) | Guía preparada; requiere tres nodos y ProxySQL |
+| 7 | [Monitoreo y observabilidad](./fase7.md) | Guía preparada; exporters pendientes de validar |
+| 8 | [RTO y RPO](./fase8.md) | Guía preparada; ejecutar después de Fases 3–7 |
+| 9 | [Resiliencia en calificación](./fase9.md) | Runbook preparado para practicar |
+| 10 | [Informe final](./fase10.md) | Estructura y reparto preparados |
 
 Documentos auxiliares:
 
@@ -17,6 +22,7 @@ Documentos auxiliares:
 - [Glosario práctico](./glosario.md)
 - [Contexto para retomar](./continuidad.md)
 - [Plan de coordinación](./plan-equipo-cierre.md)
+- [Bitácora técnica](./bitacora.md)
 - [Índice de evidencias](../evidencias/README.md)
 - [Borrador del informe](../informe/informe-final.md)
 

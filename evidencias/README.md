@@ -30,8 +30,9 @@ Reglas:
 - Añadir debajo de cada imagen una frase: acción, esperado y obtenido.
 - Si una captura contiene un secreto, descartarla, rotar el secreto y repetirla.
 
+La guía completa está en [`avances/bitacora.md`](../avances/bitacora.md).
 Tabla mínima de bitácora:
 
-| Fecha/hora | Fase | Nodo/componente | Acción | Resultado | Evidencia | Observaciones |
-|---|---|---|---|---|---|---|
-| | | | | | | |
+| Fecha/hora | Fase | Nodo/componente | Acción | Esperado | Obtenido | Recuperación | Evidencia | Observaciones |
+|---|---|---|---|---|---|---|---|---|
+| | | | | | | | | |

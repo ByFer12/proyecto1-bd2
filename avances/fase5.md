@@ -282,6 +282,17 @@ capacidad de escritura. Todavía no se hace bootstrap ni JOIN en este punto.
 Después del fallo múltiple, nodo3 puede conservar una vista minoritaria sin
 quórum. Para evitar dos grupos, se comparan GTID y se forma una sola vista.
 
+### Qué se hará en el punto 8
+
+1. Consultar el historial GTID de nodo1 y nodo3.
+2. Elegir el nodo que contiene el historial más completo.
+3. Detener la vista vieja que pudiera conservar nodo3.
+4. Iniciar **un solo grupo** desde el nodo elegido.
+5. Unir el otro nodo y demostrar que regresó la escritura.
+
+Consultar o comparar GTID no cambia datos ni configuración. No se usa
+`group_replication_force_members` en este procedimiento.
+
 ### 8.1 Byron consulta GTID de nodo1
 
 ```bash
@@ -290,51 +301,81 @@ SELECT @@global.gtid_executed;
 "'
 ```
 
+Sirve para: mostrar todas las transacciones ejecutadas por nodo1.
+
+Resultado esperado: uno o más UUID acompañados por rangos, por ejemplo
+`:1-20`; la salida no debe estar vacía.
+
 ### 8.2 Carlos consulta GTID y estado de nodo3
 
 ```powershell
 docker exec -it mysql-nodo3 mysql -uroot -p -N -e "SELECT @@global.gtid_executed; SELECT MEMBER_HOST,MEMBER_STATE FROM performance_schema.replication_group_members;"
 ```
 
-Los GTID pueden ser idénticos o nodo3 puede contener eventos adicionales de
-cambio de vista aunque no se aceptaran escrituras de aplicación. Si no son
-idénticos, se comprueba inclusión y no se decide por la longitud del texto.
+Sirve para: obtener el historial real de nodo3 y saber si conserva una vista
+minoritaria.
 
-En nodo1 se abre MySQL y se sustituye el marcador por el GTID completo de
-nodo3:
+Resultado esperado: aparece el GTID completo y la membresía de nodo3. Los GTID
+pueden ser idénticos o uno puede incluir eventos adicionales de cambio de
+vista, aunque no se aceptaran escrituras de aplicación.
+
+Carlos envía a Byron la salida completa del GTID de nodo3. Byron abre MySQL en
+nodo1 utilizando la contraseña interna del contenedor:
 
 ```bash
-docker exec -it mysql-node1 mysql -uroot -p
+docker exec -it mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"'
 ```
+
+Resultado esperado: aparece el prompt `mysql>`.
+
+Dentro de `mysql>`, Byron pega el GTID real enviado por Carlos en lugar de
+`GTID_COMPLETO_NODO3`:
 
 ```sql
 SELECT GTID_SUBSET('GTID_COMPLETO_NODO3', @@global.gtid_executed)
        AS nodo3_esta_en_nodo1;
 ```
 
-Carlos hace la comparación inversa dentro de MySQL nodo3:
-
-```sql
-SELECT GTID_SUBSET('GTID_COMPLETO_NODO1', @@global.gtid_executed)
-       AS nodo1_esta_en_nodo3;
-```
+**Importante:** `GTID_COMPLETO_NODO3` es una indicación para reemplazar, no se
+ejecuta literalmente. Antes de presionar Enter, la consulta debe contener los
+UUID y rangos reales enviados por Carlos.
 
 Interpretación:
 
-| `nodo3_esta_en_nodo1` | `nodo1_esta_en_nodo3` | Candidato de bootstrap |
-|---:|---:|---|
-| 1 | 1 | Son equivalentes; usar nodo1 por convenio. |
-| 1 | 0 | Nodo1 contiene a nodo3; usar nodo1. |
-| 0 | 1 | Nodo3 contiene a nodo1; usar nodo3. |
-| 0 | 0 | Hay divergencia; detener la fase y no hacer bootstrap. |
+- Resultado `1`: nodo1 contiene todo el historial de nodo3; elegir **Ruta A**.
+- Resultado `0`: todavía no elegir nodo. Se debe hacer la comparación inversa
+  desde nodo3 usando el GTID completo de nodo1. Si nodo3 contiene a nodo1, se
+  elige **Ruta B**; si ninguno contiene al otro, se detiene la recuperación.
 
-### 8.3 Carlos detiene la vista minoritaria de nodo3
+#### Resultado obtenido durante la ejecución de Fase 5
+
+Se comparó el GTID real de nodo3 contra `@@global.gtid_executed` de nodo1 y se
+obtuvo:
+
+```text
+nodo3_esta_en_nodo1 = 1
+```
+
+Interpretación: nodo1 contiene todas las transacciones conocidas por nodo3.
+Decisión registrada: continuar con **Ruta A**, utilizando nodo1 como candidato
+para el único bootstrap. La consulta fallida que contenía literalmente
+`GTID_COMPLETO_NODO3` no modificó datos y no se utiliza como evidencia.
+
+**Acción siguiente para esta ejecución:** como el resultado fue `1`, no se
+realiza ninguna comparación adicional. Salir de MySQL en nodo1 con `exit;` y
+pasar directamente al punto **8.3**.
+
+### 8.3 Carlos detiene la vista vieja de nodo3
 
 Carlos abre MySQL:
 
 ```powershell
-docker exec -it mysql-nodo3 mysql -uroot -p
+docker exec -it mysql-nodo3 --% sh -c "mysql -uroot -p$MYSQL_ROOT_PASSWORD"
 ```
+
+Este comando usa la contraseña que ya está cargada dentro del contenedor; no
+la solicita ni la muestra en PowerShell. Resultado esperado: aparece
+directamente el prompt `mysql>`.
 
 Dentro de `mysql>`:
 
@@ -352,6 +393,9 @@ problema: se ejecuta `SET GLOBAL super_read_only=ON` y se confirma `OFFLINE`.
 Resultado esperado: nodo3 queda `OFFLINE`. En este momento nodo1 y nodo3 están
 fuera del grupo y nodo2 sigue detenido; por lo tanto no queda ningún grupo
 activo.
+
+Sirve para: garantizar que no quede un grupo minoritario compitiendo con el
+nuevo grupo que se formará.
 
 ### 8.4 Realizar un único bootstrap en el candidato más completo
 

@@ -525,7 +525,22 @@ Resultado esperado: backend `.39` y fila insertada correctamente.
 
 ### 8.7 Michael registra T1 y calcula el RTO
 
-Cuando Byron confirme la escritura exitosa:
+**Ejecuta: Michael en la computadora de nodo2**, la misma computadora donde el
+punto 3 creó `/tmp/fase5-t0`. La ruta es absoluta y no depende de estar dentro
+de una carpeta del repositorio. Byron no puede leer ese archivo desde nodo1.
+
+Primero Michael comprueba que T0 exista:
+
+```bash
+if [ -f /tmp/fase5-t0 ]; then
+  echo "T0 encontrado: $(cat /tmp/fase5-t0)"
+else
+  echo 'ERROR: T0 no fue registrado o se perdió al reiniciar'
+fi
+```
+
+Cuando Byron confirme la escritura exitosa y aparezca `T0 encontrado`, Michael
+ejecuta:
 
 ```bash
 fase5_t1=$(date +%s)
@@ -538,6 +553,10 @@ unset fase5_t0 fase5_t1
 ```
 
 El RTO se mide desde el segundo apagado hasta recuperar un escritor utilizable.
+
+Si Michael tampoco tiene `/tmp/fase5-t0`, no se calcula un valor inventado: se
+anota `RTO no medido por ausencia de T0` y posteriormente se repite únicamente
+la medición controlada. La recuperación puede continuar con los puntos 9 y 10.
 
 > **CAPTURA F5-08:** nodo1/nodo3 `ONLINE`, nodo3 `1/1`, escritura recuperada y
 > RTO real.
@@ -598,7 +617,50 @@ No hacer bootstrap en nodo2.
 
 ### 10.2 Los tres comparan GTID y datos
 
-En cada nodo se consulta:
+Estas son consultas SQL; no se pegan directamente en Bash, Zsh o PowerShell.
+Cada integrante utiliza el comando completo correspondiente.
+
+#### Byron ejecuta en nodo1
+
+```bash
+docker exec mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+SELECT @@global.gtid_executed;
+
+SELECT correo,nombre
+FROM data_bugs.cliente
+WHERE correo IN ('\''fase5.antes@example.com'\'','\''fase5.recuperacion@example.com'\'')
+ORDER BY correo;
+
+SELECT MEMBER_HOST,MEMBER_STATE,MEMBER_ROLE
+FROM performance_schema.replication_group_members;
+"'
+```
+
+#### Michael ejecuta en nodo2
+
+```bash
+docker exec mysql-node2 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+SELECT @@global.gtid_executed;
+
+SELECT correo,nombre
+FROM data_bugs.cliente
+WHERE correo IN ('\''fase5.antes@example.com'\'','\''fase5.recuperacion@example.com'\'')
+ORDER BY correo;
+
+SELECT MEMBER_HOST,MEMBER_STATE,MEMBER_ROLE
+FROM performance_schema.replication_group_members;
+"'
+```
+
+#### Carlos ejecuta en nodo3
+
+Primero entra a MySQL usando la contraseña interna del contenedor:
+
+```powershell
+docker exec -it mysql-nodo3 --% sh -c "mysql -uroot -p$MYSQL_ROOT_PASSWORD"
+```
+
+Después pega el siguiente bloque dentro de `mysql>`:
 
 ```sql
 SELECT @@global.gtid_executed;
@@ -610,13 +672,16 @@ ORDER BY correo;
 
 SELECT MEMBER_HOST,MEMBER_STATE,MEMBER_ROLE
 FROM performance_schema.replication_group_members;
-```
 
-Carlos confirma además:
-
-```sql
 SELECT @@global.read_only,@@global.super_read_only;
 ```
+
+Sirve para:
+
+1. comparar que los tres nodos tengan el mismo historial GTID;
+2. comprobar que las marcas anterior y posterior a la falla se replicaron;
+3. confirmar que los tres miembros regresaron `ONLINE`;
+4. confirmar que nodo3 continúa protegido en solo lectura.
 
 ### Resultado esperado
 

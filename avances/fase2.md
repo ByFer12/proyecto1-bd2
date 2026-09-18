@@ -308,7 +308,33 @@ PowerShell. Como alternativa, Carlos puede abrir MySQL con
 `docker exec -it mysql-nodo3 mysql -uroot -p` y pegar el contenido del archivo
 desde el prompt `mysql>`.
 
-También se registra:
+### GTID y membresía al cierre
+
+Sí se ejecutan estas consultas después de `consistency.sql`; son de solo
+lectura. El GTID demuestra que los nodos recibieron las mismas transacciones y
+la membresía demuestra que la fase termina sin perder integrantes.
+
+Byron — nodo1:
+
+```bash
+docker exec mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+SELECT @@global.gtid_executed;
+SELECT MEMBER_HOST,MEMBER_STATE,MEMBER_ROLE
+FROM performance_schema.replication_group_members;
+"'
+```
+
+Michael — nodo2:
+
+```bash
+docker exec mysql-node2 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+SELECT @@global.gtid_executed;
+SELECT MEMBER_HOST,MEMBER_STATE,MEMBER_ROLE
+FROM performance_schema.replication_group_members;
+"'
+```
+
+Carlos — nodo3, dentro de `mysql>`:
 
 ```sql
 SELECT @@global.gtid_executed;
@@ -316,6 +342,10 @@ SELECT @@global.gtid_executed;
 SELECT MEMBER_HOST,MEMBER_STATE,MEMBER_ROLE
 FROM performance_schema.replication_group_members;
 ```
+
+Resultado requerido: mismo conjunto GTID en los tres y tres filas `ONLINE` en
+la membresía. Si un GTID todavía está atrasado, se espera unos segundos y se
+repite únicamente la consulta; no se reinicia Group Replication.
 
 Resultado requerido:
 

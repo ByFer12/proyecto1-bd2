@@ -3,9 +3,15 @@
 Este directorio contiene la instancia MySQL 8.4 de Byron, utilizada como nodo
 inicial del grupo y fuente del dataset `data_bugs`.
 
-El avance reproducible de cada fase se documenta por separado en
-[`avances/`](./avances/). La Fase 1 está detallada en
-[`avances/fase1.md`](./avances/fase1.md).
+El avance reproducible de cada fase se documenta por separado en la carpeta
+raíz [`avances/`](../../avances/). La Fase 1 está detallada en
+[`avances/fase1.md`](../../avances/fase1.md). Para retomar el proyecto desde otra
+sesión o con otro asistente se debe leer
+[`avances/continuidad.md`](../../avances/continuidad.md). La coordinación y el
+reparto para el cierre están en
+[`avances/plan-equipo-cierre.md`](../../avances/plan-equipo-cierre.md).
+La ejecución de replicación normal se registra en
+[`avances/fase2.md`](../../avances/fase2.md).
 
 ## Estado actual
 
@@ -243,13 +249,15 @@ Evaluación contra los ocho puntos de la Fase 1 del enunciado:
 - [x] Nodo1 y nodo2 configurados para lectura/escritura en modo multi-primary.
 - [x] Nodo3 configurado y validado como lectura/contingencia.
 - [x] ProxySQL integrado y validado localmente con separación lectura/escritura.
-- [x] Conectividad directa y cliente remoto autenticado mediante ProxySQL.
+- [x] Conectividad y autenticación remota a `6033` validadas con nodo3 en
+  lectura.
 - [x] Tres nodos disponibles simultáneamente.
 
 **Implementación funcional de Fase 1: 100 %** (8 puntos completos). El núcleo
-de Group Replication está en **3 de 3 nodos ONLINE**, ProxySQL enruta por roles
-y un cliente remoto de nodo3 autenticó correctamente por el puerto `6033`.
-Las capturas se organizarán en paralelo dentro del informe final.
+de Group Replication está en **3 de 3 nodos ONLINE** y ProxySQL enruta por
+roles. Carlos autenticó `app_user` por `6033` y la consulta final llegó a nodo3
+con `read_only=1`. Antes de entregar se deben rotar las credenciales expuestas
+y repetir la captura sin incluir ninguna contraseña en el comando.
 Las pruebas CRUD pertenecen a la Fase 2 y todavía no se contabilizan como
 completadas.
 
@@ -267,7 +275,7 @@ ya fue ejecutado y comprobado con evidencia.
 
 | Fase oficial | Avance | Estado actual |
 |---|---:|---|
-| 1. Preparación | 100 % | Tres nodos `ONLINE`, roles, ProxySQL, cliente remoto y diagrama validados. |
+| 1. Preparación | 100 % | Tres nodos `ONLINE`, roles, ProxySQL y cliente remoto validados; queda limpieza de secretos y captura segura para el informe. |
 | 2. Replicación normal | 10 % | Existen scripts CRUD, pero aún no se ejecutó y evidenció el ciclo desde nodo1 y nodo2. |
 | 3. Fallo de nodo1 | 10 % | Hay experiencia y procedimiento de recuperación, pero falta la prueba controlada mediante proxy, CRUD y RTO. |
 | 4. Fallo de nodo2 | 10 % | Se recuperó un incidente real de nodo2, pero falta ejecutar el escenario oficial completo y medirlo. |

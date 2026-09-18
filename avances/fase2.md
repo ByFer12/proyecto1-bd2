@@ -12,9 +12,9 @@ deben ejecutarse en la computadora que aloja el contenedor correspondiente.
 ## Estado
 
 **Preparada.** El 18 de septiembre de 2026 se confirmó la línea base sin
-modificar datos. En la última comprobación nodo1 y nodo3 estaban `ONLINE`, pero
-nodo2 estaba apagado/no alcanzable; no se inicia el INSERT hasta recuperar los
-tres miembros `ONLINE`.
+modificar datos. Después del apagado se recuperó el grupo y volvieron a
+observarse los tres miembros `ONLINE`. Antes del primer INSERT todavía se debe
+cerrar el semáforo de entrada descrito abajo y volver a capturar la línea base.
 
 ```text
 cliente          4
@@ -61,6 +61,19 @@ actual.
 
 ## 1. Estado inicial
 
+### Semáforo antes de comenzar
+
+No se ejecuta ninguna escritura de esta fase hasta comprobar:
+
+- tres miembros `ONLINE`;
+- nodo1 y nodo2 con `read_only=0` y `super_read_only=0`;
+- nodo3 con `read_only=1` y `super_read_only=1`;
+- `proxysql-db2` saludable y hostgroups 10/30 operativos;
+- conexión de prueba por ProxySQL en el puerto `6033`.
+
+Si la validación de ProxySQL de la Fase 1 sigue pendiente después de un
+apagado, se termina primero esa validación y luego se regresa a esta sección.
+
 ### Byron — membresía
 
 ```bash
@@ -76,6 +89,35 @@ Sirve para: demostrar que la prueba empieza con tres miembros `ONLINE`.
 > detener la fase y recuperar ese nodo.
 
 ### Consulta exacta de consistencia
+
+Los tres ejecutan la misma consulta en sus respectivas instancias. Byron puede
+registrar primero el valor de referencia, pero Michael y Carlos deben confirmar
+que reciben exactamente lo mismo.
+
+#### Byron — nodo1
+
+```bash
+docker exec mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+SELECT '\''cliente'\'' AS entidad, COUNT(*) AS cantidad FROM data_bugs.cliente
+UNION ALL SELECT '\''producto'\'', COUNT(*) FROM data_bugs.producto
+UNION ALL SELECT '\''pedido'\'', COUNT(*) FROM data_bugs.pedido
+UNION ALL SELECT '\''detalle_pedido'\'', COUNT(*) FROM data_bugs.detalle_pedido
+UNION ALL SELECT '\''pago'\'', COUNT(*) FROM data_bugs.pago;
+SELECT nombre,stock FROM data_bugs.producto WHERE nombre='\''Adaptador USB-C'\'';
+SELECT COUNT(*) AS cliente_prueba FROM data_bugs.cliente
+WHERE correo='\''cliente.prueba@example.com'\'';
+"'
+```
+
+#### Michael — nodo2
+
+Ejecuta el mismo bloque anterior sustituyendo únicamente `mysql-node1` por
+`mysql-node2`.
+
+#### Carlos — nodo3
+
+Carlos entra con `docker exec -it mysql-nodo3 mysql -uroot -p` y pega dentro
+de `mysql>` el SQL siguiente:
 
 ```sql
 SELECT 'cliente' AS entidad, COUNT(*) AS cantidad FROM data_bugs.cliente

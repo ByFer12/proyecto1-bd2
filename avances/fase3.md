@@ -141,27 +141,127 @@ No utilizar `docker compose down`, `down -v` ni apagar la computadora de Byron.
 
 ### Ejecuta: Byron
 
-Como `mysql-node1` está detenido, se utiliza temporalmente el cliente de la
-imagen MySQL para consultar el puerto administrativo local de ProxySQL:
+Como `mysql-node1` está detenido, ya no se puede usar su cliente `mysql`.
+ProxySQL sigue escuchando localmente en `127.0.0.1:6032`, por lo que se crea un
+contenedor temporal que contiene únicamente el cliente MySQL. Este contenedor
+no almacena datos y se elimina automáticamente al terminar.
+
+Todos los pasos siguientes se ejecutan en la misma terminal de Byron.
+
+### 4.1 Ubicarse en la raíz del repositorio
+
+```bash
+cd ~/Descargas/bases2/proyecto-1-db2
+```
+
+Sirve para: asegurar que la ruta `proxy/conf/proxysql.cnf` exista.
+
+Resultado esperado: el comando no imprime nada y el prompt queda en la raíz
+del proyecto.
+
+### 4.2 Leer las credenciales administrativas sin mostrarlas
 
 ```bash
 admin_pair=$(sed -n 's/^[[:space:]]*admin_credentials="\([^"]*\)".*/\1/p' proxy/conf/proxysql.cnf | head -n1)
 proxy_admin_user=${admin_pair%%:*}
 proxy_admin_pass=${admin_pair#*:}
+```
 
+Qué hace cada línea:
+
+1. `sed` localiza `admin_credentials` en el archivo privado.
+2. `${admin_pair%%:*}` guarda en `proxy_admin_user` lo anterior a `:`.
+3. `${admin_pair#*:}` guarda en `proxy_admin_pass` lo posterior a `:`.
+
+No imprime la contraseña. Las variables existen solamente en esa terminal.
+
+### 4.3 Confirmar que las variables fueron cargadas
+
+```bash
+if [ -n "$proxy_admin_user" ] && [ -n "$proxy_admin_pass" ]; then
+  echo "Credenciales administrativas cargadas"
+else
+  echo "ERROR: no se pudieron leer las credenciales"
+fi
+```
+
+Resultado esperado:
+
+```text
+Credenciales administrativas cargadas
+```
+
+Si aparece `ERROR`, no se ejecuta el siguiente comando y se revisa la ruta de
+`proxy/conf/proxysql.cnf`. No mostrar el contenido ni la contraseña en una
+captura.
+
+### 4.4 Consultar los servidores que ProxySQL tiene en memoria
+
+```bash
 docker run --rm --network host \
-  -e MYSQL_PWD="$proxy_admin_pass" mysql:8.4 \
+  -e MYSQL_PWD="$proxy_admin_pass" \
+  mysql:8.4 \
   mysql -h127.0.0.1 -P6032 -u"$proxy_admin_user" -e "
 SELECT hostgroup_id,hostname,port,status
 FROM runtime_mysql_servers
 ORDER BY hostgroup_id,hostname;
 "
+```
 
+Explicación de las opciones:
+
+- `docker run`: crea un contenedor temporal, no reinicia ProxySQL.
+- `--rm`: elimina ese contenedor cuando termina.
+- `--network host`: le permite alcanzar `127.0.0.1:6032` del host de Byron.
+- `MYSQL_PWD`: pasa la clave al cliente sin escribirla en el comando SQL.
+- `mysql:8.4`: aporta el ejecutable cliente mientras `mysql-node1` está caído.
+- `-P6032`: consulta la interfaz administrativa, no el puerto de aplicación.
+- El `SELECT` es de solo lectura y no cambia hostgroups ni servidores.
+
+### 4.5 Interpretar el resultado
+
+| Hostgroup | Función en el proyecto | Qué debe observarse durante la caída |
+|---:|---|---|
+| 10 | Escritores | Nodo2 `.24` disponible; nodo1 `.39` ya no utilizable aquí. |
+| 20 | Escritor de respaldo | Puede contener un escritor que exceda el máximo configurado. |
+| 30 | Lectores | Nodo3 `.57` disponible; también pueden aparecer escritores aptos para lectura. |
+| 40 | Servidores apartados | Nodo1 `.39` puede aparecer aquí después de detectarse la caída. |
+
+Valores comunes de `status`:
+
+- `ONLINE`: ProxySQL puede usar esa fila dentro del hostgroup mostrado.
+- `SHUNNED`: backend apartado temporalmente por fallos.
+- `OFFLINE_SOFT` o `OFFLINE_HARD`: backend no disponible para tráfico.
+
+Si `.39` aparece en HG40 con estado `ONLINE`, no significa que atienda
+escrituras: está `ONLINE` dentro del hostgroup de aislamiento y las reglas
+normales no envían tráfico allí.
+
+### 4.6 Si nodo1 todavía aparece activo en HG10
+
+El monitor trabaja por intervalos y puede tardar varios segundos. Esperar entre
+5 y 10 segundos y repetir **solo el comando 4.4**. No volver a detener nodo1 y
+no modificar manualmente los hostgroups.
+
+Si después de dos ciclos `.39` continúa activo, revisar el log:
+
+```bash
+docker logs proxysql-db2 --since 2m 2>&1 | tail -n 60
+```
+
+Resultado posible: mensajes de conexión rechazada o timeout hacia `.39`, que
+confirman que el monitor está procesando la caída. Si hay errores de permisos
+del usuario monitor, se detiene la fase y se corrige antes de escribir.
+
+### 4.7 Borrar las variables de la terminal
+
+```bash
 unset admin_pair proxy_admin_user proxy_admin_pass
 ```
 
-Sirve para: consultar el estado en memoria de ProxySQL sin modificarlo y
-comprobar que nodo1 dejó de ser un backend utilizable.
+Sirve para: retirar de la sesión las variables que contenían la credencial.
+
+Resultado esperado: no imprime nada.
 
 ### Resultado esperado
 
@@ -169,6 +269,25 @@ comprobar que nodo1 dejó de ser un backend utilizable.
   hostgroup de servidores apartados.
 - Nodo2 `.24` permanece disponible como escritor.
 - Nodo3 `.57` permanece disponible para lectura.
+
+Resultado observado durante la ejecución de la Fase 3:
+
+```text
+hostgroup_id  hostname        port  status
+10            100.126.57.24  3306  ONLINE
+30            100.107.61.57  3306  ONLINE
+30            100.126.57.24  3306  ONLINE
+40            100.113.38.39  3306  SHUNNED
+```
+
+Interpretación:
+
+- `.24` en HG10: nodo2 quedó como escritor disponible.
+- `.24` también en HG30: puede atender lecturas porque
+  `writer_is_also_reader=1`.
+- `.57` en HG30: nodo3 continúa disponible para lectura.
+- `.39` en HG40 y `SHUNNED`: ProxySQL detectó correctamente la caída, aisló
+  nodo1 y no le enviará tráfico. Este estado es válido y esperado para F3-04.
 
 El monitor puede tardar algunos segundos. Si el primer resultado aún muestra
 nodo1 activo, esperar un ciclo de monitoreo y repetir únicamente esta consulta.

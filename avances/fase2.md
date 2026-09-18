@@ -267,12 +267,46 @@ el stock; esto es normal y debe documentarse.
 
 ## 4. Consistencia final
 
-En cada nodo:
+Cada integrante se ubica en la raíz de su copia del repositorio. Los nombres
+de contenedor usan guion (`-`), no guion bajo (`_`).
+
+Byron — nodo1:
 
 ```bash
-docker exec NOMBRE_CONTENEDOR sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' \
+docker exec -i mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' \
   < database/tests/consistency.sql
 ```
+
+Si Byron está ubicado dentro de `nodes/node1/`, la ruta equivalente es:
+
+```bash
+docker exec -i mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' \
+  < ../../database/tests/consistency.sql
+```
+
+La opción `-i` es obligatoria cuando se redirige un archivo con `<`: mantiene
+abierta la entrada estándar del contenedor. Si se omite, puede aparecer solo la
+advertencia de contraseña y ninguna tabla, porque MySQL no recibió el SQL. Ese
+caso no significa que la consistencia haya sido validada; se corrige agregando
+`-i` y ejecutando nuevamente la consulta.
+
+Michael — nodo2:
+
+```bash
+docker exec -i mysql-node2 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' \
+  < database/tests/consistency.sql
+```
+
+Carlos — nodo3 en PowerShell, desde la raíz de su repositorio:
+
+```powershell
+Get-Content .\database\tests\consistency.sql | docker exec -i mysql-nodo3 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"'
+```
+
+La contraseña se toma de la variable interna del contenedor y no se escribe en
+PowerShell. Como alternativa, Carlos puede abrir MySQL con
+`docker exec -it mysql-nodo3 mysql -uroot -p` y pegar el contenido del archivo
+desde el prompt `mysql>`.
 
 También se registra:
 
@@ -290,6 +324,53 @@ Resultado requerido:
 - stock final 58;
 - tres miembros `ONLINE`;
 - sin errores de replicación.
+
+Después de completar los dos ciclos CRUD, el primer resultado esperado es:
+
+```text
+entidad    cantidad
+clientes   4
+productos  4
+pedidos    2
+detalles   3
+pagos      1
+```
+
+Los pedidos iniciales deben continuar consistentes:
+
+```text
+pedido_id  cliente      estado      total   total_calculado
+1          Ana Torres   PAGADO      280.50  280.50
+2          Luis Moreno  PENDIENTE   720.00  720.00
+```
+
+La última consulta de `consistency.sql` busca pagos duplicados. El resultado
+correcto es ninguna fila.
+
+El archivo de consistencia no muestra el stock ni cuenta explícitamente el
+correo de prueba. Byron los confirma adicionalmente:
+
+```bash
+docker exec mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+SELECT nombre,stock
+FROM data_bugs.producto
+WHERE nombre=\"Adaptador USB-C\";
+
+SELECT COUNT(*) AS cliente_prueba
+FROM data_bugs.cliente
+WHERE correo=\"cliente.prueba@example.com\";
+"'
+```
+
+Resultado esperado:
+
+```text
+Después del ciclo de nodo1: stock 59, cliente_prueba 0.
+Después también del ciclo de nodo2: stock 58, cliente_prueba 0.
+```
+
+La línea `Using a password on the command line interface can be insecure` es
+una advertencia del cliente MySQL, no un fallo de la consulta.
 
 > **CAPTURAS F2-12 y F2-13:** consistencia final y membresía con tres `ONLINE`.
 

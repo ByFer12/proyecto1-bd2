@@ -1,0 +1,22 @@
+-- Copiar como mysql-users.sql y sustituir ambos marcadores.
+-- La copia real contiene secretos y no se agrega a Git.
+
+CREATE USER IF NOT EXISTS 'proxysql_monitor'@'%'
+  IDENTIFIED WITH caching_sha2_password BY 'CAMBIAR_PASSWORD_MONITOR';
+ALTER USER 'proxysql_monitor'@'%'
+  IDENTIFIED WITH caching_sha2_password BY 'CAMBIAR_PASSWORD_MONITOR';
+GRANT USAGE, REPLICATION CLIENT ON *.* TO 'proxysql_monitor'@'%';
+GRANT SELECT ON performance_schema.replication_group_members
+  TO 'proxysql_monitor'@'%';
+GRANT SELECT ON performance_schema.replication_group_member_stats
+  TO 'proxysql_monitor'@'%';
+
+CREATE USER IF NOT EXISTS 'app_user'@'%'
+  IDENTIFIED WITH caching_sha2_password BY 'CAMBIAR_PASSWORD_APP';
+ALTER USER 'app_user'@'%'
+  IDENTIFIED WITH caching_sha2_password BY 'CAMBIAR_PASSWORD_APP';
+GRANT SELECT, INSERT, UPDATE, DELETE ON data_bugs.* TO 'app_user'@'%';
+
+SHOW GRANTS FOR 'proxysql_monitor'@'%';
+SHOW GRANTS FOR 'app_user'@'%';
+

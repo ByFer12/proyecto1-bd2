@@ -1,0 +1,6 @@
+GRANT SELECT ON performance_schema.replication_group_members
+  TO 'proxysql_monitor'@'%';
+GRANT SELECT ON performance_schema.replication_group_member_stats
+  TO 'proxysql_monitor'@'%';
+
+SHOW GRANTS FOR 'proxysql_monitor'@'%';

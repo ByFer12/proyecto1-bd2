@@ -3,6 +3,10 @@
 Este directorio contiene la instancia MySQL 8.4 de Byron, utilizada como nodo
 inicial del grupo y fuente del dataset `data_bugs`.
 
+El avance reproducible de cada fase se documenta por separado en
+[`avances/`](./avances/). La Fase 1 está detallada en
+[`avances/fase1.md`](./avances/fase1.md).
+
 ## Estado actual
 
 - Contenedor: `mysql-node1`.
@@ -11,7 +15,7 @@ inicial del grupo y fuente del dataset `data_bugs`.
 - IP Tailscale: `100.113.38.39`.
 - Puerto MySQL: `3306`.
 - Comunicación de Group Replication: pila `MYSQL` sobre el puerto `3306`.
-- Group Replication: nodo1 y nodo2 validados `ONLINE / PRIMARY`; nodo3 pendiente.
+- Group Replication: tres nodos validados simultáneamente `ONLINE / PRIMARY`.
 - Dataset principal: `data_bugs`.
 - Red Docker: `network_mode: host`.
 
@@ -64,7 +68,8 @@ Resultados validados:
 
 - Nodo2 puede conectarse y autenticarse contra nodo1 por `3306`.
 - Nodo1 y nodo2 están `ONLINE` mediante la pila `MYSQL`.
-- La comprobación definitiva de nodo3 por `3306` sigue pendiente.
+- Nodo1 recibe respuesta Tailscale de nodo3 y alcanza correctamente
+  `100.107.61.57:3306`.
 
 ## Configuración validada de Group Replication
 
@@ -234,24 +239,65 @@ Evaluación contra los ocho puntos de la Fase 1 del enunciado:
 
 - [x] Tres nodos en equipos independientes.
 - [x] Red privada Tailscale común y direcciones identificadas.
-- [~] Mecanismo de replicación configurado: nodo1 y nodo2 están `ONLINE`; falta nodo3.
+- [x] Mecanismo de replicación configurado: tres miembros `ONLINE`.
 - [x] Nodo1 y nodo2 configurados para lectura/escritura en modo multi-primary.
-- [ ] Nodo3 configurado y validado como lectura/contingencia.
-- [ ] Proxy o balanceador integrado.
-- [~] Conectividad validada entre nodo1 y nodo2; falta validación final con nodo3 y proxy.
-- [ ] Tres nodos disponibles simultáneamente.
+- [x] Nodo3 configurado y validado como lectura/contingencia.
+- [x] ProxySQL integrado y validado localmente con separación lectura/escritura.
+- [x] Conectividad directa y cliente remoto autenticado mediante ProxySQL.
+- [x] Tres nodos disponibles simultáneamente.
 
-**Avance estimado de Fase 1: 50 %** (3 puntos completos, 2 parciales y 3
-pendientes). El núcleo de Group Replication está en **2 de 3 nodos ONLINE**.
+**Implementación funcional de Fase 1: 100 %** (8 puntos completos). El núcleo
+de Group Replication está en **3 de 3 nodos ONLINE**, ProxySQL enruta por roles
+y un cliente remoto de nodo3 autenticó correctamente por el puerto `6033`.
+Las capturas se organizarán en paralelo dentro del informe final.
 Las pruebas CRUD pertenecen a la Fase 2 y todavía no se contabilizan como
 completadas.
 
+Después de un apagado inesperado de nodo1, Docker recuperó MySQL y ProxySQL
+sin pérdida de volúmenes. Nodo2 y nodo3 conservaron el grupo `ONLINE`; sus
+GTID coincidían con nodo1, por lo que nodo1 regresó mediante
+`START GROUP_REPLICATION`, sin bootstrap. La comprobación final volvió a
+mostrar los tres miembros `ONLINE / PRIMARY`.
+
+## Avance global contra el enunciado y el plan
+
+Estos porcentajes son una estimación técnica, no la ponderación oficial de la
+calificación. Solo se marca como terminado lo que además de estar configurado
+ya fue ejecutado y comprobado con evidencia.
+
+| Fase oficial | Avance | Estado actual |
+|---|---:|---|
+| 1. Preparación | 100 % | Tres nodos `ONLINE`, roles, ProxySQL, cliente remoto y diagrama validados. |
+| 2. Replicación normal | 10 % | Existen scripts CRUD, pero aún no se ejecutó y evidenció el ciclo desde nodo1 y nodo2. |
+| 3. Fallo de nodo1 | 10 % | Hay experiencia y procedimiento de recuperación, pero falta la prueba controlada mediante proxy, CRUD y RTO. |
+| 4. Fallo de nodo2 | 10 % | Se recuperó un incidente real de nodo2, pero falta ejecutar el escenario oficial completo y medirlo. |
+| 5. Fallo múltiple | 5 % | Se practicó un apagado total, pero no el escenario exigido con nodo3 atendiendo lecturas de contingencia. |
+| 6. Carga | 0 % | Falta herramienta, guion, ejecución y resultados. |
+| 7. Monitoreo | 15 % | Hay archivos iniciales de Prometheus/Grafana en nodo3; faltan exporters de los tres nodos, corregir destinos, dashboard y pruebas. |
+| 8. RTO/RPO | 0 % | Falta medición formal y análisis de pérdida de datos. |
+| 9. Resiliencia en calificación | 15 % | Existe un runbook de recuperación, pero falta el simulacro integral del grupo. |
+| 10. Informe final | 20 % | Este README conserva una bitácora amplia; faltan consolidar arquitectura, evidencias, resultados, limitaciones y conclusiones. |
+
+**Avance práctico estimado del enunciado obligatorio: 33 %.** La media simple
+de fases sería menor, pero la infraestructura y Group Replication representan
+una parte técnica central ya resuelta. El proyecto no se considera terminado
+hasta completar pruebas, proxy, observabilidad, métricas e informe.
+
+**Avance estimado del plan completo con mejoras: 23 %.** Las mejoras de backup,
+PITR, TLS, partición de red, validación automática, alertas, Clone Plugin y
+Telegram/Discord siguen pendientes o apenas iniciadas. No deben desplazar los
+requisitos obligatorios mientras quede alguna fase oficial incompleta.
+
+El siguiente orden seguro es: inventariar el dataset existente; ejecutar los
+scripts de `database/tests/` para la Fase 2;
+después realizar fallos, carga, monitoreo y RTO/RPO con evidencia.
+
 Evidencia técnica ya obtenida:
 
-- UUID, pila `MYSQL`, semillas y modo multi-primary coincidentes en nodo1/nodo2.
-- Canales de recuperación y usuario `repl` preparados en nodo1/nodo2.
-- Nodo1 `100.113.38.39:3306` y nodo2 `100.126.57.24:3306` simultáneamente
-  `ONLINE / PRIMARY`.
+- UUID, pila `MYSQL`, semillas y modo multi-primary coincidentes en los tres nodos.
+- Canales de recuperación y usuario `repl` preparados en los tres nodos.
+- Nodo1 `100.113.38.39:3306`, nodo2 `100.126.57.24:3306` y nodo3
+  `100.107.61.57:3306` simultáneamente `ONLINE / PRIMARY`.
 - Bootstrap confirmado en `OFF` después de formar el grupo.
 
 ### Primer intento de unión de nodo2
@@ -936,16 +982,140 @@ IP del sidecar (`100.126.57.24`). Los intentos prematuros de
 `START GROUP_REPLICATION` fallaron sin formar grupo ni activar bootstrap. Estas
 correcciones se harán después de recuperar nodo1/nodo2.
 
+Después de recuperar nodo1 y nodo2, la conectividad desde nodo1 hacia nodo3 se
+validó nuevamente:
+
+```text
+tailscale ping 100.107.61.57: pong
+TCP 100.107.61.57:3306:       succeeded
+```
+
+El mensaje posterior de Zsh `no matches found: [tcp/*]` no fue un fallo de
+red: ocurrió al pegar accidentalmente en la terminal una línea que era salida
+de `nc`. Las dos pruebas reales finalizaron correctamente.
+
+Carlos también comprobó el archivo `my.cnf` persistente de nodo3. Ya contiene
+la configuración correcta que sobrevivirá a una recreación del contenedor:
+
+```text
+communication_stack: MYSQL
+local_address:       100.107.61.57:3306
+group_seeds:         100.113.38.39:3306,100.126.57.24:3306,100.107.61.57:3306
+```
+
+No aparecen la IP antigua `100.109.4.122` ni el puerto XCOM `33061`.
+
+La verificación inmediatamente anterior a preparar nodo3 confirmó:
+
+```text
+gtid_executed:                vacío
+gtid_purged:                  vacío
+miembro local:                100.107.61.57 / OFFLINE
+canal de recuperación:        repl_user
+permisos dinámicos de repl:   BACKUP_ADMIN
+```
+
+Por tanto, nodo3 no tiene transacciones propias que puedan divergir del grupo y
+es seguro configurar sus credenciales de recuperación. Antes de unirlo se debe
+cambiar el canal a `repl` y conceder `CONNECTION_ADMIN` y
+`GROUP_REPLICATION_STREAM`, manteniendo el binlog de la sesión desactivado para
+que esta preparación local no cree GTID nuevos.
+
+La variable `group_replication_recovery_get_public_key` se comprobó activa con
+valor `1`. Esto permite que el canal de recuperación autentique al usuario
+`repl` con `caching_sha2_password` sin incluir `GET_SOURCE_PUBLIC_KEY` dentro de
+`CHANGE REPLICATION SOURCE`, combinación que anteriormente produjo el error
+3139.
+
+La preparación del usuario y del canal se completó correctamente. La evidencia
+final de nodo3 muestra:
+
+```text
+repl@%: REPLICATION SLAVE, REPLICATION CLIENT
+repl@%: BACKUP_ADMIN, CONNECTION_ADMIN, GROUP_REPLICATION_STREAM
+canal group_replication_recovery: repl
+```
+
+Con esto quedan alineados el usuario y los privilegios de recuperación. Antes
+de iniciar Group Replication solo falta validar desde el contenedor de nodo3 la
+autenticación directa contra nodo1 y nodo2.
+
+Las dos conexiones de recuperación se validaron con el usuario `repl` y la
+contraseña compartida:
+
+```text
+nodo3 -> 100.113.38.39:3306: conexión 1
+nodo3 -> 100.126.57.24:3306: conexión 1
+```
+
+Nodo3 puede autenticarse contra cualquiera de los dos donantes. Quedó listo
+para ejecutar `START GROUP_REPLICATION` sin bootstrap.
+
+### Incorporación exitosa de nodo3
+
+Nodo3 ejecutó una sola vez `START GROUP_REPLICATION`, sin bootstrap. La vista
+de membresía confirmó simultáneamente:
+
+```text
+100.113.38.39:3306  ONLINE  PRIMARY
+100.107.61.57:3306  ONLINE  PRIMARY
+100.126.57.24:3306  ONLINE  PRIMARY
+```
+
+El clúster de tres miembros quedó formado correctamente. `PRIMARY` en nodo3 es
+el rol normal que reporta Group Replication en modo multi-primary; todavía se
+debe activar y validar `super_read_only` para que opere como nodo de
+lectura/contingencia según el diseño del proyecto.
+
+La protección de nodo3 se activó después de incorporarlo y quedó validada:
+
+```text
+read_only:       1
+super_read_only: 1
+```
+
+Aunque la membresía continúe mostrando el rol `PRIMARY` por utilizar modo
+multi-primary, estas variables bloquean las escrituras directas de clientes en
+nodo3 y permiten que los hilos de replicación sigan aplicando transacciones.
+La protección debe comprobarse nuevamente después de cada reinicio o unión al
+grupo.
+
+La prueba de escritura directa se realizó intentando crear
+`prueba_no_escritura_nodo3`. MySQL respondió correctamente:
+
+```text
+ERROR 1290 (HY000): The MySQL server is running with the --super-read-only
+option so it cannot execute this statement
+```
+
+La base de prueba no fue creada. Esto valida que un cliente no puede modificar
+nodo3 directamente mientras funciona como contingencia.
+
+Después de preparar la cuenta, la validación confirmó que `repl@%` tiene
+`REPLICATION SLAVE`, `BACKUP_ADMIN`, `CONNECTION_ADMIN` y
+`GROUP_REPLICATION_STREAM`. El canal `group_replication_recovery` también quedó
+configurado para usar `repl`, sustituyendo al usuario incorrecto `repl_user`.
+
+La preparación se completó correctamente con el binlog de sesión desactivado:
+
+- `repl@%` usa la misma credencial privada que nodo1 y nodo2.
+- Conserva `REPLICATION SLAVE` y `BACKUP_ADMIN`.
+- Recibió `CONNECTION_ADMIN` y `GROUP_REPLICATION_STREAM`.
+- El canal `group_replication_recovery` ahora utiliza `repl`, no `repl_user`.
+- `group_replication_recovery_get_public_key` devolvió `1`.
+- El binlog de la sesión volvió a activarse al terminar.
+
+Después de estas validaciones, nodo3 se incorporó correctamente y quedó
+`ONLINE` junto a los otros dos miembros.
+
 ## Próximos pasos
 
-1. Revisar GTID y datos existentes en nodo3 antes de tocar su volumen.
-2. Migrar nodo3 a pila `MYSQL`, crear su usuario de recuperación y unirlo sin
-   bootstrap.
-3. Configurar nodo3 como lectura/contingencia y confirmar tres miembros
-   `ONLINE`.
-4. Integrar ProxySQL o el balanceador elegido y validar conectividad completa.
-5. Guardar capturas y diagrama para cerrar la evidencia de Fase 1.
-6. Ejecutar y documentar CRUD desde nodo1 y nodo2 para la Fase 2.
+1. Activar y validar `super_read_only` en nodo3 para convertirlo en
+   lectura/contingencia.
+2. Ejecutar y documentar CRUD replicado desde nodo1 y nodo2 para la Fase 2.
+3. Integrar ProxySQL o el balanceador elegido y validar conectividad completa.
+4. Guardar capturas y diagrama para cerrar la evidencia de Fase 1.
+5. Continuar con monitoreo, respaldo y las mejoras adicionales del plan.
 
 `group_replication_bootstrap_group` nunca debe permanecer activo. Solo se usa
 al crear el grupo inicial y se desactiva inmediatamente después.
@@ -1063,10 +1233,190 @@ dispositivo del sidecar `mysql-node2` (`100.126.57.24`) no apareció en la lista
 Antes de recuperar el grupo se debe comprobar el GTID y el estado Tailscale
 interno de nodo2.
 
+La comprobación de nodo2 confirmó que MySQL no perdió configuración ni datos:
 
-soy nodo 1 y recien ejecute este comando para antes de irme y este fue su resultado:
-fer@Torres-PC  ~/Descargas/bases2/proyecto-1-db2/nodes/node1  ↰ main ±  docker exec mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
-STOP GROUP_REPLICATION;
-SET GLOBAL group_replication_bootstrap_group=OFF;
+```text
+gtid_executed:        5248cb8e-aff2-11f1-8a74-fa8b2c2f6510:1-20
+communication_stack:  MYSQL
+local_address:        100.126.57.24:3306
+bootstrap:            0
+estado del grupo:     OFFLINE
+```
+
+El GTID coincide exactamente con nodo1. El único fallo real es el sidecar:
+conserva `100.126.57.24`, pero `tailscale status` informa `logged out` y un
+error al contactar el servidor de coordinación. La IP Tailscale del host
+`100.109.4.122` y su puerto `3306` siguen accesibles. Además, un
+`docker compose ps` ejecutado desde la raíz devolvió `no configuration file
+provided`; esto no es desconfiguración y se corrige entrando primero a
+`nodes/node2`.
+
+Orden de recuperación: validar logs y `tailscale netcheck`, reiniciar el mismo
+sidecar conservando su volumen de estado, renovar la clave solo si continúa
+cerrada la sesión, confirmar nuevamente `100.126.57.24`, hacer un único
+bootstrap en nodo1 y unir nodo2 sin bootstrap.
+
+El reinicio conservó el volumen, pero el sidecar entró en ciclo de reinicio. El
+log confirmó la causa definitiva: la clave de autenticación configurada ya no
+es válida y Tailscale queda en `NeedsLogin/NoState`. `tailscale netcheck` había
+confirmado previamente conectividad UDP y DERP, por lo que no es un fallo de
+Internet. El aviso de que `tailscale0` todavía no existe es una consecuencia
+normal del reinicio, no la causa. Se requiere una clave nueva de la misma
+tailnet, guardada únicamente en el `.env` ignorado de Michael.
+
+Después de reemplazar la clave privada, se recrearon únicamente
+`tailscale-node2` y `mysql-node2`, conservando ambos volúmenes. El sidecar
+recuperó `100.126.57.24`, MySQL volvió a `healthy` y nodo1 confirmó conexión TCP
+exitosa hacia `100.126.57.24:3306`. No se inició Group Replication durante esta
+recuperación.
+
+La verificación de nodo2 confirmó el mismo GTID exacto que nodo1,
+`5248cb8e-aff2-11f1-8a74-fa8b2c2f6510:1-20`, pila `MYSQL`, dirección local
+`100.126.57.24:3306`, semillas correctas, bootstrap `0` y estado `OFFLINE`.
+No existe divergencia. Después de renovar la clave privada del sidecar,
+`tailscale-node2` recuperó la misma IP `100.126.57.24`, apareció conectado en
+la tailnet y `mysql-node2` quedó `healthy`. Desde nodo1 también se comprobó que
+`100.126.57.24:3306` era accesible.
+
+### Recuperación posterior al encendido: 17 de septiembre
+
+Con los GTID de nodo1 y nodo2 iguales y la red restablecida, se reconstruyó el
+grupo haciendo **un único bootstrap en nodo1**. El procedimiento encendió la
+bandera, inició Group Replication y la apagó inmediatamente incluso antes de
+consultar el resultado final.
+
+Resultado comprobado en nodo1:
+
+```text
+bootstrap:   0
+MEMBER_HOST: 100.113.38.39
+MEMBER_PORT: 3306
+MEMBER_STATE: ONLINE
+MEMBER_ROLE: PRIMARY
+```
+
+Esto confirma que nodo1 formó correctamente el grupo y que la bandera de
+bootstrap no quedó activa. Después, nodo2 ejecutó solamente
+`START GROUP_REPLICATION`, **sin bootstrap**, y terminó su recuperación.
+
+Estado final comprobado después del encendido:
+
+```text
+MEMBER_HOST       MEMBER_PORT  MEMBER_STATE  MEMBER_ROLE
+100.113.38.39     3306         ONLINE        PRIMARY
+100.126.57.24     3306         ONLINE        PRIMARY
+```
+
+Nodo1 y nodo2 quedaron nuevamente operativos. No se requiere ninguna otra
+configuración en nodo2 antes de preparar nodo3.
+
+## Procedimiento operativo ante reinicios y fallos
+
+Esta sección es la guía corta que se debe seguir sin improvisar durante la
+evaluación.
+
+### Caso A: encender un nodo cuando otro miembro continúa `ONLINE`
+
+1. Confirmar Tailscale, contenedor y acceso al puerto `3306` del miembro vivo.
+2. Iniciar Group Replication en el nodo que regresó **sin bootstrap**:
+
+```bash
+docker exec mysql-nodeX sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+START GROUP_REPLICATION;
+SELECT MEMBER_HOST, MEMBER_PORT, MEMBER_STATE, MEMBER_ROLE
+FROM performance_schema.replication_group_members;
 "'
-mysql: [Warning] Using a password on the command line interface can be insecure.
+```
+
+El nodo puede aparecer brevemente como `RECOVERING`; el resultado final debe
+ser `ONLINE`. Nunca se activa bootstrap mientras exista un grupo vivo.
+
+### Caso B: todos los equipos estuvieron apagados
+
+1. Encender Tailscale, Docker y MySQL, pero no iniciar Group Replication.
+2. Consultar el GTID en cada nodo candidato:
+
+```bash
+docker exec mysql-nodeX sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -e "SELECT @@global.gtid_executed;"'
+```
+
+3. Elegir el nodo con el conjunto GTID más actualizado. Si nodo1 y nodo2 tienen
+   el mismo GTID, se usa nodo1. Si son divergentes, detenerse y reconciliarlos.
+4. Formar el grupo una sola vez en el nodo elegido y garantizar que la bandera
+   vuelva a `OFF`:
+
+```bash
+docker exec mysql-node1 sh -c '
+mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SET GLOBAL group_replication_bootstrap_group=ON;"
+mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "START GROUP_REPLICATION;"
+resultado=$?
+mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "SET GLOBAL group_replication_bootstrap_group=OFF;"
+mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+SELECT @@global.group_replication_bootstrap_group AS bootstrap;
+SELECT MEMBER_HOST, MEMBER_PORT, MEMBER_STATE, MEMBER_ROLE
+FROM performance_schema.replication_group_members;
+"
+exit "$resultado"
+'
+```
+
+Se espera `bootstrap = 0` y el nodo elegido `ONLINE`. Los demás nodos se unen
+después con el comando del caso A, nunca con otro bootstrap.
+
+### Caso C: nodo2 está `healthy`, pero su Tailscale está desconectado
+
+Comprobar primero el estado y los logs del sidecar:
+
+```bash
+docker exec tailscale-node2 tailscale status
+docker logs tailscale-node2 --since 10m --tail 120
+```
+
+Si el log indica una clave inválida, se genera una nueva clave de la misma
+tailnet, se guarda solamente como `TS_AUTHKEY` en el `.env` ignorado de nodo2 y
+se recrean los dos servicios sin eliminar volúmenes:
+
+```bash
+docker compose up -d --force-recreate tailscale-node2 mysql-node2
+docker exec tailscale-node2 tailscale ip -4
+docker compose ps
+```
+
+La IP esperada es `100.126.57.24` y MySQL debe quedar `healthy`. Nunca se pega
+la clave en el README ni se ejecuta `docker compose down -v`.
+
+Una clave reutilizable puede autenticar más de una vez, pero no es permanente:
+Tailscale permite asignarle una vigencia máxima y también puede ser revocada.
+Con `TS_AUTH_ONCE=true` y el volumen `tailscale_node2_state` persistente, un
+reinicio normal reutiliza la identidad guardada y no debería consumir ni volver
+a solicitar la clave. Si nodo2 vuelve a desconectarse, primero se revisan
+`tailscale status` y los logs; solo se reemplaza `TS_AUTHKEY` cuando el mensaje
+confirme clave inválida, expirada o sesión perdida.
+
+Después de recuperar Tailscale, se confirma desde nodo1 que
+`100.126.57.24:3306` sea accesible. Si nodo1 todavía pertenece a un grupo
+`ONLINE`, nodo2 regresa **sin bootstrap**:
+
+```bash
+docker exec mysql-node2 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+START GROUP_REPLICATION;
+SELECT MEMBER_HOST, MEMBER_PORT, MEMBER_STATE, MEMBER_ROLE
+FROM performance_schema.replication_group_members;
+"'
+```
+
+Se espera que nodo2 pase de `RECOVERING` a `ONLINE`. Si no queda ningún miembro
+`ONLINE`, no se ejecuta este paso a ciegas: primero se comparan los GTID y se
+aplica el procedimiento del caso B, con un único bootstrap.
+
+### Verificación final después de cualquier recuperación
+
+```sql
+SELECT @@global.group_replication_bootstrap_group AS bootstrap;
+SELECT MEMBER_HOST, MEMBER_PORT, MEMBER_STATE, MEMBER_ROLE
+FROM performance_schema.replication_group_members;
+```
+
+La condición correcta es `bootstrap = 0` y todos los miembros esperados en
+`ONLINE`. `RECOVERING` es transitorio; `OFFLINE`, `ERROR` o una fila `NULL`
+requieren revisar los logs antes de continuar.

@@ -1,0 +1,21 @@
+services:
+  proxysql:
+    image: proxysql/proxysql:3.0.11-debian
+    container_name: proxysql-db2
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - proxysql_data:/var/lib/proxysql
+      - ./conf/proxysql.cnf:/etc/proxysql.cnf:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          awk '$$2 ~ /:1791$$/ && $$4 == "0A" { found=1 }
+          END { exit !found }' /proc/net/tcp /proc/net/tcp6
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+volumes:
+  proxysql_data:

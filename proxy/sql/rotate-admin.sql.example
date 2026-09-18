@@ -1,0 +1,6 @@
+UPDATE global_variables
+SET variable_value='admin:CAMBIAR_PASSWORD_ADMIN_NUEVA'
+WHERE variable_name='admin-admin_credentials';
+
+SAVE ADMIN VARIABLES TO DISK;
+LOAD ADMIN VARIABLES TO RUNTIME;

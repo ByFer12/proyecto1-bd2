@@ -1,0 +1,74 @@
+UPDATE global_variables
+SET variable_value='proxysql_monitor'
+WHERE variable_name='mysql-monitor_username';
+
+UPDATE global_variables
+SET variable_value='CAMBIAR_PASSWORD_MONITOR'
+WHERE variable_name='mysql-monitor_password';
+
+DELETE FROM mysql_group_replication_hostgroups
+WHERE writer_hostgroup=10;
+
+INSERT INTO mysql_group_replication_hostgroups
+  (writer_hostgroup, backup_writer_hostgroup, reader_hostgroup,
+   offline_hostgroup, active, max_writers, writer_is_also_reader,
+   max_transactions_behind, comment)
+VALUES
+  (10, 20, 30, 40, 1, 2, 1, 100, 'Data Bugs Group Replication');
+
+DELETE FROM mysql_servers
+WHERE hostname IN ('100.113.38.39', '100.126.57.24', '100.107.61.57');
+
+INSERT INTO mysql_servers
+  (hostgroup_id, hostname, port, max_connections, comment)
+VALUES
+  (10, '100.113.38.39', 3306, 100, 'Nodo1 Byron RW'),
+  (10, '100.126.57.24', 3306, 100, 'Nodo2 Michael RW'),
+  (10, '100.107.61.57', 3306, 100, 'Nodo3 Carlos RO');
+
+DELETE FROM mysql_users WHERE username='app_user';
+
+INSERT INTO mysql_users
+  (username, password, active, default_hostgroup, default_schema,
+   transaction_persistent, comment)
+VALUES
+  ('app_user', 'CAMBIAR_PASSWORD_APP', 1, 10, 'data_bugs', 1,
+   'Usuario de aplicación Data Bugs');
+
+DELETE FROM mysql_query_rules WHERE rule_id IN (100, 110);
+
+INSERT INTO mysql_query_rules
+  (rule_id, active, username, match_digest, destination_hostgroup, apply,
+   comment)
+VALUES
+  (100, 1, 'app_user', '^SELECT.*FOR UPDATE', 10, 1,
+   'SELECT FOR UPDATE siempre a escritores'),
+  (110, 1, 'app_user', '^SELECT', 30, 1,
+   'SELECT normales al grupo de lectura');
+
+LOAD MYSQL VARIABLES TO RUNTIME;
+SAVE MYSQL VARIABLES TO DISK;
+LOAD MYSQL SERVERS TO RUNTIME;
+SAVE MYSQL SERVERS TO DISK;
+LOAD MYSQL USERS TO RUNTIME;
+SAVE MYSQL USERS TO DISK;
+LOAD MYSQL QUERY RULES TO RUNTIME;
+SAVE MYSQL QUERY RULES TO DISK;
+
+SELECT writer_hostgroup, backup_writer_hostgroup, reader_hostgroup,
+       offline_hostgroup, active, max_writers, writer_is_also_reader
+FROM runtime_mysql_group_replication_hostgroups;
+
+SELECT hostgroup_id, hostname, port, status, comment
+FROM runtime_mysql_servers
+ORDER BY hostgroup_id, hostname;
+
+SELECT username, active, default_hostgroup, default_schema
+FROM runtime_mysql_users
+WHERE username='app_user';
+
+SELECT rule_id, active, match_digest, destination_hostgroup, apply
+FROM runtime_mysql_query_rules
+WHERE rule_id IN (100, 110)
+ORDER BY rule_id;
+

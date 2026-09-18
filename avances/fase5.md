@@ -397,14 +397,22 @@ activo.
 Sirve para: garantizar que no quede un grupo minoritario compitiendo con el
 nuevo grupo que se formará.
 
+#### Resultado obtenido durante esta ejecución
+
+Carlos obtuvo `100.107.61.57 / OFFLINE`. El punto 8.3 quedó completado
+correctamente. Como en el punto anterior
+`nodo3_esta_en_nodo1=1`, el siguiente paso es la **Ruta A** del punto 8.4,
+ejecutada por Byron. Carlos no ejecuta la Ruta B.
+
 ### 8.4 Realizar un único bootstrap en el candidato más completo
 
 Se ejecuta **solo una** de las dos rutas siguientes.
 
 #### Ruta A — GTID equivalentes o nodo1 contiene a nodo3
 
-Este bloque se ejecuta solamente después de confirmar GTID compatibles y
-nodo3 `OFFLINE`:
+**Ejecuta: Byron en nodo1.** Este bloque se ejecuta solamente después de
+confirmar GTID compatibles y nodo3 `OFFLINE`. En la ejecución actual esta es
+la ruta seleccionada:
 
 ```bash
 docker exec mysql-node1 sh -c '
@@ -425,7 +433,11 @@ Resultado esperado: `bootstrap=0` y nodo1 `.39 ONLINE`.
 
 #### Ruta B — Nodo3 contiene a nodo1
 
-Carlos ejecuta dentro de `mysql>` y comprueba cada instrucción:
+**Ejecutaría: Carlos, solamente si la comparación hubiera indicado que nodo3
+contiene a nodo1. No se utiliza esta ruta en la ejecución actual.**
+
+En ese escenario alternativo, Carlos ejecutaría dentro de `mysql>` y
+comprobaría cada instrucción:
 
 ```sql
 SET GLOBAL group_replication_bootstrap_group=ON;

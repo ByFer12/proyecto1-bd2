@@ -1,0 +1,5 @@
+Method,Name,Error,Occurrences
+MYSQL,UPDATE stock,"OperationalError(2013, 'Lost connection to MySQL server during query')",3
+MYSQL,UPDATE stock,"OperationalError(3101, 'Plugin instructed the server to rollback the current transaction.')",35
+MYSQL,SELECT producto,"OperationalError(2013, 'Lost connection to MySQL server during query')",2
+MYSQL,UPDATE stock,"OperationalError(1213, 'Deadlock found when trying to get lock; try restarting transaction')",1

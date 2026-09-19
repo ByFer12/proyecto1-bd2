@@ -131,8 +131,10 @@ Resultado esperado: no imprime la contraseña.
 ---
 
 ## 1. Generar carga controlada y provocar la caída de nodo1 (Escenario A)
+## 1. Generar carga controlada de operaciones sobre nodo1 y nodo2
 
 ### Ejecuta: Byron
+### Ejecuta: Byron (Terminal 1)
 
 Para mayor claridad y para tomar las capturas con calma en el momento exacto, **se recomienda usar dos terminales (o dos pestañas)**:
 
@@ -141,6 +143,7 @@ Para mayor claridad y para tomar las capturas con calma en el momento exacto, **
 ### 🟢 PASO 1 — En la Terminal 1: Iniciar la carga de Locust
 
 1. Confirmar que los tres nodos están listos:
+1. Confirmar que los tres nodos están listos (`ONLINE`):
 ```bash
 docker exec mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
 SELECT MEMBER_HOST,MEMBER_STATE,MEMBER_ROLE
@@ -149,6 +152,7 @@ FROM performance_schema.replication_group_members;
 ```
 
 2. Lanzar la prueba de carga de 60 segundos:
+2. Iniciar la prueba de carga de 60 segundos a través de ProxySQL:
 ```bash
 docker run --rm --network host \
   -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
@@ -162,48 +166,51 @@ docker run --rm --network host \
 | tee evidencias/fase6/resultados/escenario-a-consola.txt
 ```
 
-> 📸 **CAPTURA F6-01:** En cuanto comience a imprimir `Starting Locust... Ramping to 10 users...`, toma captura de la pantalla mostrando el comando ejecutado, los tres nodos `ONLINE` y el arranque de Locust.
+> 📸 **CAPTURA F6-01:** En cuanto comience a imprimir `Starting Locust... Ramping to 10 users...`, toma captura de la pantalla mostrando el comando, los tres nodos `ONLINE` y el arranque del tráfico.
 
 ---
 
-### 🟡 PASO 2 — En la Terminal 2: Provocar la caída exacta al segundo 30 (50 % de la prueba)
+## 2. Al 50 % de las operaciones, provocar la caída de nodo1 y verificar en caliente
 
-En cuanto veas que la Terminal 1 empezó a correr, ve a la **Terminal 2** y ejecuta este comando con `sleep 30` (espera exactamente 30 segundos, imprime la hora y detiene el contenedor):
+### Ejecuta: Byron (Terminal 2)
+
+En cuanto veas que la Terminal 1 comenzó a correr Locust, ve a la **Terminal 2** y ejecuta este comando encadenado:
 
 ```bash
-sleep 30 && date --iso-8601=seconds && docker stop mysql-node1
-```
-
-Inmediatamente verifica en ProxySQL que nodo1 pasó a estar apartado:
-```bash
-docker exec proxysql-db2 mysql -uadmin -padmin -h127.0.0.1 -P6032 -e "
-SELECT hostgroup, hostname, port, status FROM runtime_mysql_servers;
+sleep 30 && date --iso-8601=seconds && docker stop mysql-node1 && sleep 2 && docker exec proxysql-db2 mysql -uadmin -padministradordb123 -h127.0.0.1 -P6032 -e "
+SELECT hostgroup_id, hostname, port, status FROM runtime_mysql_servers;
+SELECT hostgroup, srv_host, Queries, ConnUsed FROM stats_mysql_connection_pool;
 "
 ```
 
-Regresa a la **Terminal 1** y espera a que Locust termine sus 60 segundos y muestre el reporte final.
+¿Qué hace este comando automáticamente?
+1. Espera exactamente 30 segundos (el 50 % de la prueba de 60s).
+2. Imprime la marca de tiempo exacta de la caída.
+3. Detiene `mysql-node1`.
+4. Espera 2 segundos a que ProxySQL marque al nodo como `SHUNNED`.
+5. Muestra en pantalla que nodo1 fue apartado y que el tráfico pasó a nodo2.
 
-> 📸 **CAPTURA F6-02:** Toma captura mostrando la hora de caída en la Terminal 2 con `docker stop mysql-node1` (o ProxySQL con nodo1 apartado) y la tabla de resumen final de Locust en la Terminal 1.
+> 📸 **CAPTURA F6-02:** Toma captura de la Terminal 2 mostrando la hora de caída, el estado en ProxySQL con nodo1 apartado y las consultas en nodo2, y la tabla de resumen final de Locust en Terminal 1 cuando termine.
 
 ---
 
-## 2. Comprobar resultados y recuperar nodo1
+## 3. Verificar que las operaciones restantes continúen ejecutándose sobre el nodo disponible
 
-### Ejecuta: Byron en la Terminal 1
+### 3.1 Verificación de métricas en CSV y recuperación (Terminal 1)
 
-1. Leer estadísticas y fallos registrados en los archivos CSV:
+Una vez completados los 60 segundos de Locust en la Terminal 1, comprueba en los archivos CSV que existieron operaciones exitosas tras la caída:
 
-Ver métricas generales y percentiles:
+Ver resumen de solicitudes y latencias:
 ```bash
 sed -n '1,12p' evidencias/fase6/resultados/escenario-a_stats.csv
 ```
 
-Ver fallos transitorios durante la conmutación:
+Ver registro de fallos transitorios durante la conmutación:
 ```bash
 sed -n '1,12p' evidencias/fase6/resultados/escenario-a_failures.csv
 ```
 
-2. Recuperar el Nodo 1 (encender y reincorporar al grupo sin bootstrap):
+Recuperar el Nodo 1 y reincorporarlo al grupo:
 ```bash
 docker start mysql-node1
 ```
@@ -216,9 +223,8 @@ FROM performance_schema.replication_group_members;
 "'
 ```
 
-Resultado esperado: Existen operaciones procesadas tras la caída en nodo2 y el clúster vuelve a tener los tres nodos `ONLINE`.
-
 > 📸 **CAPTURA F6-03:** Salida de los CSV demostrando continuidad de operaciones y la consulta final con los tres nodos nuevamente `ONLINE`.
+
 
 
 ---

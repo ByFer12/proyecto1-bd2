@@ -21,6 +21,112 @@ Docker. La carpeta base ya existe en `nodes/node3/monitoreo/`, pero esta fase
 no se considera terminada hasta que Prometheus muestre los seis targets
 esperados como `UP`.
 
+## Contexto indispensable de nodo2 para Michael y Carlos
+
+El host Debian de Michael usa **Docker Desktop**. El Tailscale instalado en ese
+host tiene la IP `100.109.4.122`, pero Docker Desktop ejecuta MySQL dentro de
+otra máquina/espacio de red. Por eso MySQL no podía enlazar directamente la IP
+Tailscale del host; Group Replication fallaba y, con la pila XCOM, incluso se
+observó un cierre de `mysqld` durante `START GROUP_REPLICATION`.
+
+La solución que ya funciona está en `nodes/node2/docker-compose.yml`:
+
+1. `tailscale-node2` crea su propia interfaz Tailscale dentro de Docker. Se
+   registró con una clave `TS_AUTHKEY` privada en `nodes/node2/.env`; **no** se
+   copia la clave al repositorio ni a mensajes.
+2. Ese sidecar obtuvo `100.126.57.24`, una IP distinta de la del host. Que
+   `tailscale status` muestre ambos dispositivos es normal: son dos máquinas
+   Tailscale lógicas, no un cuarto miembro de Group Replication.
+3. `mysql-node2` usa `network_mode: "service:tailscale-node2"`; ambos
+   contenedores comparten interfaz y `127.0.0.1`. El volumen
+   `mysql_node2_data` conserva los datos.
+4. `nodes/node2/conf/my.cnf` publica `report_host=100.126.57.24`, usa la pila
+   `MYSQL`, dirección local `100.126.57.24:3306` y semillas en puerto `3306`.
+   Los otros nodos y ProxySQL también usan esa IP.
+
+Por tanto, Prometheus de Carlos debe apuntar **a `100.126.57.24:9104` para
+MySQL y `100.126.57.24:9100` para CPU/memoria**, nunca a `.122`. El archivo
+`nodes/node3/monitoreo/prometheus/prometheus.yml` ya contiene estos targets.
+Los exporters de nodo2 deben compartir el espacio de red del sidecar, como en
+el punto 1.4; no se instala otro Tailscale ni se cambia la IP del clúster.
+Tampoco es necesario publicar `9100` o `9104` en `ports:` del Compose para
+acceder a ellos por la IP Tailscale del sidecar, siempre que el exporter escuche
+en `0.0.0.0`.
+
+### Comprobaciones sin modificar nodo2
+
+**Michael, desde `nodes/node2/`:**
+
+```bash
+docker compose ps
+docker exec tailscale-node2 tailscale ip -4
+docker exec mysql-node2 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -e "SELECT @@report_host,@@group_replication_communication_stack;"'
+```
+
+Esperado: los contenedores `Up`, IP `100.126.57.24` y valores
+`100.126.57.24  MYSQL`. Si Tailscale muestra `NeedsLogin`, `NoState` o una IP
+distinta, se sigue `avances/inicio.md` antes de tocar Group Replication. La
+clave de registro debe ser válida; si se vuelve a autenticar el **mismo**
+estado persistente, la IP puede conservarse, pero no se debe asumir sin
+verificarlo.
+
+**Estado observado desde nodo1 al preparar Fase 7:** el MySQL de nodo2 por
+`.24:3306` respondía, pero `.24:9100` y `.24:9104` devolvían
+`Connection refused`. No se interpreta como fallo de Tailscale o Group
+Replication: primero Michael debe confirmar si existen/están activos los
+exporters de nodo2 con `docker ps --filter name=exporter`, seguir el punto 1.4
+si aún no se han creado y verificar sus logs si algún contenedor termina.
+
+**Carlos, desde Prometheus:** comprobar en `Status → Targets` que ambos
+targets `.24:9104` y `.24:9100` aparecen `UP`. Si están `DOWN`, revisar por
+separado que los exporters estén activos y que el contenedor de Prometheus
+pueda alcanzar la IP `.24`; que MySQL esté `ONLINE` no basta para validar el
+monitoreo.
+
+### Qué ocurrió con los exporters de nodo1
+
+Byron ya creó `exporter` en MySQL nodo1 mientras Group Replication estaba
+activo. Su creación y `GRANT` deberían replicarse a nodo2/nodo3; **Michael no
+debe crear otra cuenta por su cuenta**. Primero debe comprobar si existe con
+`SHOW GRANTS FOR 'exporter'@'%';` dentro de MySQL nodo2. `FLUSH PRIVILEGES` no
+es necesario después de `CREATE USER` y `GRANT`.
+
+El primer `mysqld-exporter:v0.15.1` de Byron usó `DATA_SOURCE_NAME` y no
+proporcionó las métricas esperadas: esa variable dejó de admitirse desde
+v0.15.0. Se recreó con `MYSQLD_EXPORTER_PASSWORD`,
+`--mysqld.username=exporter` y `--mysqld.address=127.0.0.1:3306`. Resultado
+comprobado en nodo1: `mysql_up 1`; `node_exporter` también devolvió
+`node_memory_MemTotal_bytes`. Sus contenedores reales se llaman
+`mysqld-exporter` y `node-exporter`; **no** ejecutar ciegamente el punto 1.3
+con nombres nuevos mientras estos ya funcionan. El punto 1.3 muestra la
+variante recomendada con archivo privado `.my.cnf` para un despliegue limpio.
+
+Una comprobación breve de cada exporter es:
+
+```bash
+curl -fsS http://100.126.57.24:9104/metrics | grep '^mysql_up'
+curl -fsS http://100.126.57.24:9100/metrics | grep '^node_memory_MemTotal_bytes'
+```
+
+Esperado desde un equipo que alcance la IP del sidecar: `mysql_up 1` y una
+línea de memoria. `mysql_up 0` indica que el exporter HTTP responde, pero no
+logra entrar a MySQL; un timeout/refused indica problema de red, escucha o
+contenedor. No se incluye la contraseña privada en capturas ni en esta guía.
+
+Nota de seguridad: la contraseña de `exporter` fue escrita una vez en un
+comando y compartida durante el diagnóstico. Cuando termine la integración,
+el equipo debe rotarla coordinadamente en MySQL y en los archivos privados de
+los tres exporters. No volver a ponerla en Git, capturas, comandos copiados o
+mensajes. Asimismo, `sudo ufw allow 9100/tcp` y `9104/tcp` abre esos puertos
+más ampliamente que una regla limitada a Tailscale; revisar las reglas antes
+de la entrega y restringirlas a la interfaz/red privada sin interrumpir las
+pruebas. La cuenta creada con `SELECT ON *.*` tiene permisos más amplios que
+los estrictamente necesarios para algunas métricas; es una mejora de seguridad
+posterior, no una causa del `Connection refused`.
+
+Referencia sobre `DATA_SOURCE_NAME` y las opciones soportadas:
+[registro oficial de cambios de mysqld_exporter](https://github.com/prometheus/mysqld_exporter/blob/main/CHANGELOG.md).
+
 ## Responsables iniciales
 
 - Byron: exporter de nodo1, generación de carga y apoyo en Grafana.
@@ -48,8 +154,14 @@ comandos Docker locales.
 Con los tres nodos `ONLINE`, Byron abre MySQL en nodo1:
 
 ```bash
-docker exec -it mysql-node1 mysql -uroot -p
+docker exec -it mysql-node1 sh -c 'exec mysql -uroot -p"$MYSQL_ROOT_PASSWORD"'
 ```
+
+**Estado actual:** Byron ya ejecutó `CREATE USER` y `GRANT`; no repetir este
+paso si `SHOW GRANTS FOR 'exporter'@'%';` confirma la cuenta. `CREATE USER IF
+NOT EXISTS` tampoco cambia una contraseña existente. En un despliegue nuevo se
+usarían las sentencias siguientes con una clave privada, nunca con una clave
+copiada de la guía.
 
 Dentro de MySQL, reemplaza el marcador por una contraseña privada nueva:
 

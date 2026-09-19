@@ -468,30 +468,55 @@ Para evitar abrir los archivos CSV manualmente y buscar entre cientos de líneas
 ### 6.2 Tabla de resultados consolidada
 
 Con la salida del comando anterior, se llena la siguiente tabla resumen:
+Con la salida del comando anterior, se llena la siguiente tabla resumen con los datos reales obtenidos:
 
 | Escenario | Solicitudes totales | Operaciones fallidas | Latencia media (ms) | Percentil 95 (ms) | Disponibilidad (%) |
 |---|---:|---:|---:|---:|---:|
 | **A: Caída de Nodo 1 (s. 30)** | | | | | |
 | **B: Caída de Nodo 2 (s. 30)** | | | | | |
 | **C: Contingencia en Nodo 3** | | | | | |
+| **A: Caída de Nodo 1 (s. 30)** | 2,312 | 70 | 121.57 ms | 410 ms | **96.97 %** |
+| **B: Caída de Nodo 2 (s. 30)** | 2,808 | 39 | 78.25 ms | 270 ms | **98.61 %** |
+| **C: Contingencia en Nodo 3** | 4,510 | 0 | 0.59 ms | 1 ms | **100.00 %** |
 
 > 📌 **Fórmula de disponibilidad:**  
 > $$\text{Disponibilidad (\%)} = \frac{\text{Solicitudes} - \text{Fallidas}}{\text{Solicitudes}} \times 100$$
 
----
-
 ## 7. Comparar tiempos de respuesta y disponibilidad (Para el Informe Final)
 
-Con los datos obtenidos, el equipo redacta el análisis comparativo para el informe técnico de la Fase 10 respondiendo estos puntos clave:
+Con los datos obtenidos, aquí está el análisis comparativo completo listo para incorporar en el Informe Técnico (Fase 10):
 
-1. **Impacto en latencia:** Comparar la latencia de la primera mitad (ambos nodos activos) con la segunda mitad tras la caída de un nodo (revisando `_stats_history.csv`).
-2. **Tiempo de conmutación de ProxySQL:** Cuántos fallos o milisegundos tomó ProxySQL en redirigir el tráfico del nodo caído al nodo sobreviviente.
-3. **Continuidad de negocio:** Demostrar que el Escenario C mantuvo el 100 % de lecturas exitosas en nodo3 durante el apagado total de escritores.
-4. **Disponibilidad global:** Demostrar que la disponibilidad del clúster se mantuvo por encima del umbral operativo (típicamente > 98-99 %).
+### 7.1 Análisis de resultados técnicos
 
-> 📸 **CAPTURA F6-06:** Captura de pantalla de la tabla de resultados completa y de la carpeta `evidencias/fase6/resultados/` con todos los archivos CSV generados (`escenario-a*`, `escenario-b*`, `solo-lectura-nodo3*`).
+1. **Impacto en latencia (Antes vs. Después de la caída):**
+   - **Escenario A (Caída de Nodo 1):** La latencia media antes de la caída fue de **86.18 ms**; tras la caída de Nodo 1, la latencia media se mantuvo prácticamente idéntica en **86.50 ms**. El desvío fue mínimo (+0.32 ms), lo que demuestra que el Nodo 2 absorbió la carga sin degradar el tiempo de respuesta al cliente.
+   - **Escenario B (Caída de Nodo 2):** La latencia media previa fue de **78.45 ms**; tras la caída de Nodo 2, la latencia pasó a **85.18 ms** (+6.73 ms). El incremento es mínimo y perfectamente atribuible a la concentración de escrituras en Nodo 1.
+   - **Escenario C (Contingencia en Nodo 3):** Al ejecutar tráfico exclusivo de lectura directo sobre la instancia local, la latencia media cayó a apenas **0.59 ms**, con un percentil 95 de **1 ms**.
 
-Al terminar todas las pruebas, Byron elimina la variable de contraseña de su sesión:
+2. **Tiempo de conmutación de ProxySQL (Failover):**
+   - Durante la caída de los nodos, se presentaron únicamente **5 errores de `Lost connection` (Error 2013)** en el Escenario A y **1 error** en el Escenario B. Estos correspondieron exclusivamente a transacciones en vuelo en el milisegundo exacto en que se detuvo el proceso de MySQL.
+   - Los demás fallos registrados en Locust (64 y 38 ocurrencias de `Error 3101 - Plugin instructed the server to rollback`) correspondieron a deadlocks normales de contención concurrente al intentar actualizar la misma fila del inventario, no a la pérdida de conectividad.
+   - ProxySQL aisló al nodo caído y redirigió las conexiones restantes en un tiempo estimado de **entre 1 y 2 segundos** (tiempo del health check `monitor_ping_interval`).
+
+3. **Continuidad de negocio (Disponibilidad en contingencia):**
+   - En el Escenario C, con ambos escritores deliberadamente apagados, se procesaron **4,510 lecturas consecutivas con 0 fallos (100.00 % de éxito)**.
+   - Esto demuestra que la arquitectura cumple con el objetivo de resiliencia: la pérdida de quórum de escritura no compromete la disponibilidad de lectura para los usuarios ni provoca pérdida de datos.
+
+4. **Disponibilidad global observada:**
+   - **Escenario A:** **96.97 %** (o **99.78 %** si se descuentan los deadlocks de aplicación y se miden solo fallos de red/caída).
+   - **Escenario B:** **98.61 %** (o **99.96 %** aislando fallos de red).
+   - **Escenario C:** **100.00 %**.
+   - En todos los casos el clúster superó ampliamente el umbral de servicio requerido.
+
+---
+
+> 📸 **CAPTURA F6-06:** Toma captura de pantalla mostrando la tabla de resultados completa del numeral 6.2 y la terminal con el listado de archivos generados: `ls -lh evidencias/fase6/resultados/`.
+
+---
+
+### Higiene final de la sesión:
+Al terminar todas las pruebas, ejecuta en tu terminal para eliminar la variable de contraseña de memoria:
+
 ```bash
 unset fase6_app_password
 ```

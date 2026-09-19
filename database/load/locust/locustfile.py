@@ -59,24 +59,49 @@ class MySQLUser(User):
                     pass
             self.connection = None
 
+    # ── Lecturas (activas en modo 'read' y 'mixed') ───────────────────────
+
     @task(3)
     def consultar_producto(self):
         self._execute(
             "SELECT producto",
-            "SELECT nombre, stock FROM producto WHERE producto_id=1",
+            "SELECT nombre, precio, stock FROM producto WHERE producto_id = 1",
+        )
+
+    @task(2)
+    def listar_clientes(self):
+        self._execute(
+            "SELECT clientes",
+            "SELECT cliente_id, nombre FROM cliente LIMIT 10",
+        )
+
+    @task(2)
+    def consultar_pedidos(self):
+        self._execute(
+            "SELECT pedidos",
+            "SELECT pedido_id, estado, total FROM pedido ORDER BY creado_en DESC LIMIT 5",
         )
 
     @task(1)
-    def operacion_secundaria(self):
-        if self.load_mode == "read":
+    def conteo_general(self):
+        self._execute(
+            "SELECT conteo",
+            "SELECT COUNT(*) FROM cliente",
+        )
+
+    # ── Escrituras (solo activas en modo 'mixed') ─────────────────────────
+
+    @task(1)
+    def operacion_escritura(self):
+        if self.load_mode != "read":
             self._execute(
-                "SELECT conteo",
-                "SELECT COUNT(*) FROM cliente",
+                "UPDATE stock",
+                "UPDATE producto SET stock = stock + 1 WHERE producto_id = 1",
             )
         else:
             self._execute(
-                "UPDATE sin cambio",
-                "UPDATE producto SET stock=stock WHERE producto_id=1",
+                "SELECT pagos",
+                "SELECT COUNT(*) FROM pago",
             )
 
     def on_stop(self):

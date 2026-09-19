@@ -229,63 +229,64 @@ FROM performance_schema.replication_group_members;
 
 ---
 
-## 4. Repetir la carga provocando la caída de nodo2
+## 4. Repetir la carga provocando la caída de nodo2 (Escenario B)
 
-No comenzar hasta confirmar nuevamente tres miembros `ONLINE`.
+Este escenario es el equivalente al Escenario A, pero **ahora la falla se provoca en nodo2** (a cargo de Michael).
 
-### 4.1 Byron inicia el escenario B
+No comenzar hasta confirmar nuevamente que los tres miembros están `ONLINE`.
 
-Iniciar la carga en segundo plano:
+---
+
+### 4.1 Byron inicia el Escenario B (Terminal 1)
+
+Lanzar la carga de 60 segundos guardando los resultados en `escenario-b`:
 ```bash
-(
-  docker run --rm --network host \
-    -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
-    -e DB_USER=app_user -e DB_PASSWORD="$fase6_app_password" \
-    -e DB_SCHEMA=data_bugs -e LOAD_MODE=mixed \
-    -v "$PWD/evidencias/fase6/resultados:/results" \
-    proyecto-db2-locust:2.32.10 \
-    -f /mnt/locust/locustfile.py \
-    --headless --users 10 --spawn-rate 2 --run-time 60s \
-    --csv /results/escenario-b --csv-full-history --only-summary \
-  | tee evidencias/fase6/resultados/escenario-b-consola.txt
-) &
-fase6_pid=$!
+docker run --rm --network host \
+  -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
+  -e DB_USER=app_user -e DB_PASSWORD="$fase6_app_password" \
+  -e DB_SCHEMA=data_bugs -e LOAD_MODE=mixed \
+  -v "$PWD/evidencias/fase6/resultados:/results" \
+  proyecto-db2-locust:2.32.10 \
+  -f /mnt/locust/locustfile.py \
+  --headless --users 10 --spawn-rate 2 --run-time 60s \
+  --csv /results/escenario-b --csv-full-history --only-summary \
+| tee evidencias/fase6/resultados/escenario-b-consola.txt
 ```
 
-Esperar 30 segundos (50 % de la prueba):
+---
+
+### 4.2 Michael provoca la caída de nodo2 al segundo 30 (en su máquina)
+
+En cuanto Byron le avise que arrancó la prueba, Michael ejecuta en su terminal (Debian):
+
 ```bash
-sleep 30
+sleep 30 && date --iso-8601=seconds && docker stop mysql-node2
 ```
 
-Avisar a Michael para detener nodo2:
+> ⚠️ **IMPORTANTE PARA MICHAEL:** Se detiene **únicamente** `mysql-node2`. **NO detener `tailscale-node2`**, ya que se perdería la IP de red del nodo.
+
+Resultado esperado: Al segundo 30 se detiene `mysql-node2`. Byron confirma que ProxySQL aparta a nodo2 (`.24`) y mantiene a nodo1 (`.39`) procesando todas las operaciones.
+
+---
+
+### 4.3 Byron verifica en caliente en ProxySQL (Terminal 2)
+
+En cuanto Michael detenga su nodo, Byron ejecuta en su **Terminal 2**:
+
 ```bash
-echo "MICHAEL: detener mysql-node2 ahora"
+docker exec proxysql-db2 mysql -uadmin -padministradordb123 -h127.0.0.1 -P6032 -e "
+SELECT hostgroup_id, hostname, port, status FROM runtime_mysql_servers;
+SELECT hostgroup, srv_host, Queries, ConnUsed FROM stats_mysql_connection_pool;
+"
 ```
 
-Registrar la marca de tiempo de la caída:
-```bash
-date --iso-8601=seconds
-```
+> 📸 **CAPTURA F6-04:** Terminal de Michael con la hora de caída y `docker stop mysql-node2`, ProxySQL en la máquina de Byron con nodo2 apartado, y el reporte final de Locust al terminar.
 
-Sirve para: repetir exactamente la carga y señalar el instante del 50 %.
+---
 
-### 4.2 Michael detiene únicamente MySQL nodo2
+### 4.4 Byron revisa resultados CSV (Terminal 1)
 
-Detener MySQL en nodo2:
-```bash
-docker stop mysql-node2
-```
-
-No debe detener `tailscale-node2`, porque se perdería también la ruta de red.
-
-Resultado esperado: devuelve `mysql-node2` y nodo1 continúa como escritor.
-
-### 4.3 Byron espera y consulta resultados
-
-Esperar que termine el proceso de Locust:
-```bash
-wait "$fase6_pid"
-```
+Una vez completados los 60 segundos en Locust:
 
 Ver estadísticas generales del escenario B:
 ```bash
@@ -297,14 +298,28 @@ Ver registro de fallos del escenario B:
 sed -n '1,12p' evidencias/fase6/resultados/escenario-b_failures.csv
 ```
 
-Resultado esperado: Locust completa la prueba y ProxySQL dirige las
-operaciones restantes a nodo1. Los fallos transitorios, si existen, quedan en
-el CSV.
+---
 
-Michael recupera nodo2 siguiendo Fase 4, puntos 6–7: inicia `mysql-node2`,
-ejecuta `START GROUP_REPLICATION` sin bootstrap y espera `ONLINE`.
+### 4.5 Michael recupera y reincorpora nodo2 (en su máquina)
 
-> **CAPTURA F6-04:** nodo2 detenido, nodo1 escritor, resumen y recuperación.
+Una vez concluida la prueba, Michael enciende y une su nodo al grupo existente (**sin bootstrap**):
+
+1. Encender el contenedor:
+```bash
+docker start mysql-node2
+```
+
+2. Unirse al grupo y verificar que los 3 nodos vuelvan a estar `ONLINE`:
+```bash
+docker exec mysql-node2 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+START GROUP_REPLICATION;
+SELECT MEMBER_HOST,MEMBER_PORT,MEMBER_STATE,MEMBER_ROLE
+FROM performance_schema.replication_group_members;
+"'
+```
+
+Resultado esperado: Los tres miembros (`.39`, `.24`, `.57`) vuelven a estar `ONLINE / PRIMARY`.
+
 
 ---
 

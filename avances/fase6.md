@@ -321,44 +321,71 @@ FROM performance_schema.replication_group_members;
 Resultado esperado: Los tres miembros (`.39`, `.24`, `.57`) vuelven a estar `ONLINE / PRIMARY`.
 
 
+## 5. Apagar nodo1/nodo2 y generar solo lecturas en nodo3 (Escenario C - Contingencia)
+
+En este escenario se valida el comportamiento extremo de contingencia: **ambos escritores (nodo1 y nodo2) se apagan**, demostrando que no se permiten escrituras y que **nodo3 continúa atendiendo lecturas directas bajo carga** con Locust.
+
 ---
 
-## 5. Apagar nodo1/nodo2 y generar solo lecturas en nodo3
+### 5.1 Byron y Michael apagan sus respectivos nodos de escritura
 
-Primero se reutiliza Fase 5, puntos 1–6: confirmar sincronización, detener
-nodo1 y nodo2, demostrar que no hay escritura y mantener nodo3 protegido `1/1`.
+Antes de lanzar la carga en nodo3, se detienen los dos nodos escritores:
 
-### 5.1 Carlos construye Locust desde la raíz de su copia
+- **Byron (en Ubuntu):**
+  ```bash
+  docker stop mysql-node1
+  ```
 
-Crear carpeta de resultados en Windows:
+- **Michael (en Debian):**
+  ```bash
+  docker stop mysql-node2
+  ```
+  *(Recuerda: NO detener `tailscale-node2`).*
+
+---
+
+### 5.2 Carlos construye Locust y pide credenciales en Windows (PowerShell)
+
+En su máquina Windows, Carlos abre PowerShell como administrador en la raíz del repositorio:
+
+1. Crear la carpeta para guardar los resultados:
 ```powershell
 New-Item -ItemType Directory -Force .\evidencias\fase6\resultados | Out-Null
 ```
 
-Construir la imagen de Locust:
+2. Construir la imagen de Locust en Windows:
 ```powershell
 docker build -t proyecto-db2-locust:2.32.10 .\database\load\locust
 ```
 
-Verificar la versión instalada:
+3. Verificar que la imagen responde:
 ```powershell
 docker run --rm proyecto-db2-locust:2.32.10 --version
 ```
 
-Resultado esperado: muestra `locust 2.32.10`.
-
-### 5.2 Carlos carga la contraseña de `app_user`
-
-Pedir credencial de forma segura:
+4. Cargar la contraseña de `app_user` de forma segura (se abre ventana emergente):
 ```powershell
 $fase6Cred = Get-Credential -UserName app_user -Message "Contraseña de app_user"
 ```
 
-Sirve para: pedir el secreto sin escribirlo en el comando.
+---
 
-### 5.3 Carlos ejecuta 60 segundos de lectura directa en nodo3
+### 5.3 Carlos confirma la protección de solo lectura en nodo3
 
-Ejecutar carga de solo lectura contra nodo3:
+Antes de lanzar Locust, Carlos comprueba que nodo3 está protegido contra escritura:
+
+```powershell
+docker exec -it mysql-nodo3 mysql -uroot -p -e "SELECT @@report_host AS nodo, @@global.read_only AS read_only, @@global.super_read_only AS super_read_only;"
+```
+
+Resultado esperado: `read_only = 1` y `super_read_only = 1`.
+
+---
+
+### 5.4 Carlos ejecuta 60 segundos de carga de solo lectura
+
+Carlos lanza Locust con `LOAD_MODE=read` conectado directamente a la red del contenedor `mysql-nodo3`:
+
 ```powershell
 docker run --rm --network container:mysql-nodo3 `
   -e DB_HOST=127.0.0.1 -e DB_PORT=3306 `
@@ -372,61 +399,99 @@ docker run --rm --network container:mysql-nodo3 `
   --csv /results/solo-lectura-nodo3 --csv-full-history --only-summary
 ```
 
-Limpiar la variable de credencial de memoria:
+Limpiar la credencial de la memoria al finalizar:
 ```powershell
 $fase6Cred = $null
 ```
 
-Sirve para: demostrar disponibilidad de lectura directa cuando no existe
-quórum de escritura. `LOAD_MODE=read` impide que Locust ejecute `UPDATE`.
+Resultado esperado: Todas las peticiones son lecturas (`SELECT`), 0 escrituras, 0 fallos y nodo3 atiende el tráfico con éxito a pesar de que nodo1 y nodo2 están caídos.
 
-Resultado esperado: lecturas exitosas, cero escrituras y nodo3 continúa con
-`read_only=1`, `super_read_only=1`.
-
-Después se recupera el clúster siguiendo Fase 5, puntos 7–10.
-
-> **CAPTURA F6-05:** resumen de Locust y nodo3 protegido `1/1`.
+> 📸 **CAPTURA F6-05:** Terminal de Carlos mostrando la protección de nodo3 (`read_only=1 / super_read_only=1`) y el reporte final exitoso de Locust en modo solo lectura.
 
 ---
+
+### 5.5 Recuperación ordenada del clúster tras la contingencia
+
+Para restablecer el clúster a su estado normal con 3 miembros `ONLINE`:
+
+1. **Byron enciende nodo1 y hace bootstrap:**
+   Como ambos escritores se apagaron y se perdió quórum, Byron inicia nodo1 con bootstrap temporal:
+   ```bash
+   docker start mysql-node1
+   docker exec mysql-node1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+   SET GLOBAL group_replication_bootstrap_group=ON;
+   START GROUP_REPLICATION;
+   SET GLOBAL group_replication_bootstrap_group=OFF;
+   SELECT MEMBER_HOST, MEMBER_STATE, MEMBER_ROLE FROM performance_schema.replication_group_members;
+   "'
+   ```
+
+2. **Michael enciende y une nodo2 (sin bootstrap):**
+   ```bash
+   docker start mysql-node2
+   docker exec mysql-node2 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+   START GROUP_REPLICATION;
+   SELECT MEMBER_HOST, MEMBER_STATE, MEMBER_ROLE FROM performance_schema.replication_group_members;
+   "'
+   ```
+
+3. **Carlos reincorpora nodo3 (en PowerShell):**
+   ```powershell
+   docker exec -it mysql-nodo3 mysql -uroot -p -e "START GROUP_REPLICATION; SELECT MEMBER_HOST, MEMBER_STATE, MEMBER_ROLE FROM performance_schema.replication_group_members;"
+   ```
+
+Resultado final: Los tres nodos (`.39`, `.24`, `.57`) vuelven al estado `ONLINE`.
+
 
 ## 6. Registrar el comportamiento de cada escenario
 
-### Ejecuta: Carlos
+Para evitar abrir los archivos CSV manualmente y buscar entre cientos de líneas, se pueden extraer los totales exactos de la fila `Aggregated` con estos comandos:
 
-Completar con los CSV generados por Locust:
+### 6.1 Extraer métricas de los tres escenarios (en Linux o PowerShell)
 
-| Escenario | Solicitudes | Fallidas | Latencia media | p95 | Disponibilidad |
+- **Escenario A (Caída de Nodo 1):**
+  ```bash
+  grep "Aggregated" evidencias/fase6/resultados/escenario-a_stats.csv
+  ```
+
+- **Escenario B (Caída de Nodo 2):**
+  ```bash
+  grep "Aggregated" evidencias/fase6/resultados/escenario-b_stats.csv
+  ```
+
+- **Escenario C (Solo lectura en Nodo 3):**
+  *(En Windows PowerShell por Carlos):*
+  ```powershell
+  Select-String -Pattern "Aggregated" .\evidencias\fase6\resultados\solo-lectura-nodo3_stats.csv
+  ```
+
+### 6.2 Tabla de resultados consolidada
+
+Con la salida del comando anterior, se llena la siguiente tabla resumen:
+
+| Escenario | Solicitudes totales | Operaciones fallidas | Latencia media (ms) | Percentil 95 (ms) | Disponibilidad (%) |
 |---|---:|---:|---:|---:|---:|
-| Nodo1 cae al segundo 30 | | | | | |
-| Nodo2 cae al segundo 30 | | | | | |
-| Solo lectura en nodo3 | | | | | |
+| **A: Caída de Nodo 1 (s. 30)** | | | | | |
+| **B: Caída de Nodo 2 (s. 30)** | | | | | |
+| **C: Contingencia en Nodo 3** | | | | | |
 
-La fila `Aggregated` de cada archivo `_stats.csv` contiene el total. La
-disponibilidad se calcula así:
-
-```text
-(solicitudes - fallidas) / solicitudes × 100
-```
-
-La serie `_stats_history.csv` permite comparar la primera mitad con la segunda.
+> 📌 **Fórmula de disponibilidad:**  
+> $$\text{Disponibilidad (\%)} = \frac{\text{Solicitudes} - \text{Fallidas}}{\text{Solicitudes}} \times 100$$
 
 ---
 
-## 7. Comparar tiempos y disponibilidad
+## 7. Comparar tiempos de respuesta y disponibilidad (Para el Informe Final)
 
-El equipo responde en el informe:
+Con los datos obtenidos, el equipo redacta el análisis comparativo para el informe técnico de la Fase 10 respondiendo estos puntos clave:
 
-- ¿Cuánto cambió la latencia tras cada caída?
-- ¿Cuántas operaciones fallaron durante la detección de ProxySQL?
-- ¿Qué escritor atendió la segunda mitad?
-- ¿Continuaron las lecturas con solo nodo3?
-- ¿Qué disponibilidad tuvo cada escenario?
-- ¿Qué muestran Prometheus y Grafana durante los mismos instantes?
+1. **Impacto en latencia:** Comparar la latencia de la primera mitad (ambos nodos activos) con la segunda mitad tras la caída de un nodo (revisando `_stats_history.csv`).
+2. **Tiempo de conmutación de ProxySQL:** Cuántos fallos o milisegundos tomó ProxySQL en redirigir el tráfico del nodo caído al nodo sobreviviente.
+3. **Continuidad de negocio:** Demostrar que el Escenario C mantuvo el 100 % de lecturas exitosas en nodo3 durante el apagado total de escritores.
+4. **Disponibilidad global:** Demostrar que la disponibilidad del clúster se mantuvo por encima del umbral operativo (típicamente > 98-99 %).
 
-> **CAPTURA F6-06:** tabla final, CSV y paneles de monitoreo de Fase 7.
+> 📸 **CAPTURA F6-06:** Captura de pantalla de la tabla de resultados completa y de la carpeta `evidencias/fase6/resultados/` con todos los archivos CSV generados (`escenario-a*`, `escenario-b*`, `solo-lectura-nodo3*`).
 
-Al terminar, Byron elimina la variable temporal:
-
+Al terminar todas las pruebas, Byron elimina la variable de contraseña de su sesión:
 ```bash
 unset fase6_app_password
 ```

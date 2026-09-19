@@ -1,104 +1,90 @@
-# Fase 6 — Pruebas de carga
+# Fase 6 — Pruebas de carga con Locust
 
 ## Objetivo oficial
 
 Validar el balanceo y la resiliencia bajo carga, provocar la caída de cada
-escritor aproximadamente al 50 % de las operaciones y comprobar lectura en
-nodo3 cuando ambos escritores estén apagados.
+escritor aproximadamente al 50 % de la prueba y comprobar lecturas en nodo3
+cuando ambos escritores estén apagados.
 
 ## Herramienta seleccionada
 
-Se utilizará el script versionado
-`database/tests/load_phase6.sh`, ejecutado dentro de la imagen `mysql:8.4`.
-El script utiliza el cliente `mysql`, que sí está presente en esa imagen, y no
-`mysqlslap`, que no viene incluido en la imagen utilizada por el proyecto.
+Se utiliza **Locust**, una de las herramientas recomendadas por el enunciado.
+Locust genera usuarios concurrentes, registra éxitos, fallos, latencias y
+percentiles, y exporta los resultados a CSV.
 
-No se instala nada en los sistemas operativos. La carga normal entra por
-ProxySQL (`6033`) y el script:
+El archivo `database/load/locust/locustfile.py` solamente define las consultas
+SQL de la prueba. No es un generador artesanal: el motor de carga, la
+concurrencia y las estadísticas pertenecen a Locust.
 
-- ejecuta exactamente 100 operaciones por lote;
-- simula 10 clientes concurrentes;
-- alterna `SELECT` y `UPDATE` sin cambio de valor;
-- cuenta operaciones exitosas y fallidas;
-- calcula duración, latencia promedio/mínima/máxima y disponibilidad.
+No se usa `mysqlslap` porque la imagen `mysql:8.4` utilizada por el proyecto no
+incluye ese ejecutable. Tampoco se usa k6 porque MySQL no es un protocolo
+integrado en k6 y requeriría construir extensiones `xk6-sql` y su driver.
 
-### Por qué cumple el enunciado
+La imagen auxiliar de Locust:
 
-El enunciado recomienda k6, JMeter, Locust **o una herramienta equivalente**.
-El script es una herramienta equivalente y reproducible porque controla
-cantidad, concurrencia, tipo de operación, resultados y tiempos sobre el
-protocolo MySQL real.
+- no modifica los tres MySQL;
+- no modifica sus volúmenes;
+- no instala paquetes en Linux o Windows;
+- se conecta por ProxySQL en el puerto `6033`;
+- combina 75 % de `SELECT` y 25 % de `UPDATE stock=stock` sin alterar datos.
 
-Cada escenario contiene dos lotes iguales:
+## Responsables iniciales
 
-```text
-100 operaciones antes de la falla
-              ↓ 50 %
-         caída del nodo
-              ↓
-100 operaciones después de la falla
-```
-
-Prometheus y Grafana, configurados en Fase 7, complementan esta carga con CPU,
-memoria, disponibilidad, replicación y comportamiento durante la falla.
-
-### Por qué no se utiliza `mysqlslap`
-
-Aunque `mysqlslap` es una herramienta oficial de MySQL, la ejecución comprobó:
-
-```text
-/usr/local/bin/docker-entrypoint.sh: ... mysqlslap: not found
-```
-
-La imagen `mysql:8.4` de este proyecto contiene `mysql`, pero no ese binario.
-No se modifica el sistema ni se instala un paquete solo para ocultar el error;
-se utiliza el script verificable incluido en el repositorio.
-
-## Responsables
-
-| Tarea | Responsable inicial |
+| Tarea | Responsable |
 |---|---|
-| Generar carga y observar ProxySQL | Byron |
-| Detener/recuperar nodo2 | Michael |
-| Operar nodo3, evidencias y tabla | Carlos |
+| Ejecutar Locust, ProxySQL y caída de nodo1 | Byron |
+| Detener y recuperar nodo2 | Michael |
+| Prueba directa de nodo3, resultados y capturas | Carlos |
+
+Los responsables pueden rotarse. Cada orden indica quién la ejecuta porque
+los contenedores están en equipos distintos.
 
 ---
 
 ## Preparación común
 
-### Ejecuta: Byron desde la raíz del repositorio
+### P.1 Verificar el estado inicial — ejecutan los tres
+
+Antes de generar carga se utiliza el semáforo de `avances/fase2.md`.
+
+Resultado necesario:
+
+- tres miembros `ONLINE`;
+- nodo1 y nodo2 permiten escritura;
+- nodo3 conserva `read_only=1` y `super_read_only=1`;
+- `proxysql-db2` está activo.
+
+No iniciar la prueba con un miembro `OFFLINE`, `RECOVERING` o `UNREACHABLE`.
+
+### P.2 Construir Locust — ejecuta Byron desde la raíz
 
 ```bash
 mkdir -p evidencias/fase6/resultados
-chmod +x database/tests/load_phase6.sh
-sh -n database/tests/load_phase6.sh
-docker run --rm mysql:8.4 mysql --version
+
+docker build \
+  -t proyecto-db2-locust:2.32.10 \
+  database/load/locust
+
+docker run --rm proyecto-db2-locust:2.32.10 --version
 ```
 
-Sirve para: preparar resultados, comprobar la sintaxis del generador y validar
-que el cliente `mysql` existe en la imagen.
+Sirve para: crear una imagen auxiliar reproducible con Locust y el controlador
+PyMySQL.
 
-Resultado esperado:
+Resultado esperado: la construcción termina sin errores y el último comando
+muestra `locust 2.32.10`.
 
-- `sh -n` no imprime errores.
-- `mysql --version` muestra MySQL 8.4.
-
-Después confirmar mediante el semáforo de `avances/fase2.md`:
-
-- tres miembros `ONLINE`;
-- nodo3 con `read_only=1` y `super_read_only=1`;
-- ProxySQL activo;
-- las marcas temporales de Fase 5 ya fueron limpiadas.
-
-Byron carga una sola vez la contraseña privada de `app_user`:
+### P.3 Cargar la contraseña sin mostrarla — ejecuta Byron
 
 ```bash
 read -s 'fase6_app_password?Contraseña de app_user: '
 echo
 ```
 
-No se muestra ni se captura esta variable. Al terminar se ejecuta
-`unset fase6_app_password`.
+Sirve para: conservar la contraseña solo en una variable temporal; no queda
+escrita en el historial ni en las capturas.
+
+Resultado esperado: no imprime la contraseña.
 
 ---
 
@@ -106,192 +92,216 @@ No se muestra ni se captura esta variable. Al terminar se ejecuta
 
 ### Ejecuta: Byron
 
-Con ambos escritores `ONLINE`, ejecutar el primer lote de 100 operaciones:
+La prueba dura 60 segundos con 10 usuarios virtuales. Se deja trabajando en
+segundo plano para provocar la falla mientras la misma ejecución continúa:
 
 ```bash
-set -o pipefail
-
-docker run --rm --network host --entrypoint sh \
-  -e MYSQL_PWD="$fase6_app_password" \
-  -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
-  -e DB_USER=app_user -e DB_SCHEMA=data_bugs \
-  -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 \
-  -e LOAD_MODE=mixed -e LOAD_LABEL=escenario-a-antes \
-  -v "$PWD/database/tests/load_phase6.sh:/load_phase6.sh:ro" \
-  mysql:8.4 /load_phase6.sh \
-  | tee evidencias/fase6/resultados/escenario-a-antes.txt
+(
+  docker run --rm --network host \
+    -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
+    -e DB_USER=app_user -e DB_PASSWORD="$fase6_app_password" \
+    -e DB_SCHEMA=data_bugs -e LOAD_MODE=mixed \
+    -v "$PWD/evidencias/fase6/resultados:/results" \
+    proyecto-db2-locust:2.32.10 \
+    -f /mnt/locust/locustfile.py \
+    --headless --users 10 --spawn-rate 2 --run-time 60s \
+    --csv /results/escenario-a --csv-full-history --only-summary \
+  | tee evidencias/fase6/resultados/escenario-a-consola.txt
+) &
+fase6_pid=$!
 ```
 
-Sirve para: establecer la línea base con nodo1 y nodo2 disponibles.
+Sirve para: iniciar una sola carga continua a través de ProxySQL. Locust crea
+los archivos `escenario-a_stats.csv`, `escenario-a_stats_history.csv`,
+`escenario-a_failures.csv` y `escenario-a_exceptions.csv`.
+
+Resultado esperado: el proceso queda activo y la terminal muestra un número
+de trabajo/PID. No cerrar esa terminal.
+
+> **CAPTURA F6-01:** inicio de Locust y tres nodos `ONLINE`.
+
+---
+
+## 2. Aproximadamente al 50 %, provocar la caída de nodo1
+
+### Ejecuta: Byron en la misma terminal
+
+```bash
+sleep 30
+date --iso-8601=seconds
+docker stop mysql-node1
+wait "$fase6_pid"
+```
+
+Sirve para: detener nodo1 a los 30 de 60 segundos. Con una tasa de carga
+estable, ese instante representa aproximadamente el 50 % de las operaciones.
+La prueba no se reinicia; continúa mediante nodo2.
 
 Resultado esperado:
 
-```text
-operaciones_intentadas=100
-operaciones_exitosas=100
-operaciones_fallidas=0
-disponibilidad_porcentaje=100.00
-```
+- `docker stop` devuelve `mysql-node1`;
+- Locust completa los 60 segundos;
+- el resumen muestra solicitudes, fallos, latencia media y percentiles.
 
-También aparecen duración y latencias. Si hay fallos, detener la prueba y
-guardar los errores; todavía no provocar la caída.
+Después se reutiliza la consulta de hostgroups de Fase 3, punto 4. Nodo1 `.39`
+debe estar en HG40/`SHUNNED`, mientras nodo2 `.24` permanece escritor.
 
-> **CAPTURA F6-01:** resumen completo y tres nodos `ONLINE`.
+> **CAPTURA F6-02:** hora de caída, ProxySQL con nodo1 apartado y resumen de
+> Locust.
 
 ---
 
-## 2. Al 50 %, provocar la caída de nodo1
-
-La finalización del primer lote representa 100 de 200 operaciones, es decir,
-el 50 % del escenario.
+## 3. Comprobar que las operaciones continuaron sobre nodo2
 
 ### Ejecuta: Byron
 
 ```bash
+sed -n '1,12p' evidencias/fase6/resultados/escenario-a_stats.csv
+sed -n '1,12p' evidencias/fase6/resultados/escenario-a_failures.csv
+```
+
+Sirve para: leer el total real de operaciones, fallos y tiempos medidos. El
+archivo de historial permite observar valores antes y después del segundo 30.
+
+Resultado esperado: existen operaciones después de la caída. Puede haber
+fallos breves mientras ProxySQL detecta el cambio; se registran, no se ocultan.
+
+Luego Byron recupera nodo1 siguiendo Fase 3, puntos 7–8: inicia el contenedor,
+ejecuta `START GROUP_REPLICATION` **sin bootstrap** y espera tres `ONLINE`.
+
+> **CAPTURA F6-03:** nodo2 disponible, resultados CSV y clúster recuperado.
+
+---
+
+## 4. Repetir la carga provocando la caída de nodo2
+
+No comenzar hasta confirmar nuevamente tres miembros `ONLINE`.
+
+### 4.1 Byron inicia el escenario B
+
+```bash
+(
+  docker run --rm --network host \
+    -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
+    -e DB_USER=app_user -e DB_PASSWORD="$fase6_app_password" \
+    -e DB_SCHEMA=data_bugs -e LOAD_MODE=mixed \
+    -v "$PWD/evidencias/fase6/resultados:/results" \
+    proyecto-db2-locust:2.32.10 \
+    -f /mnt/locust/locustfile.py \
+    --headless --users 10 --spawn-rate 2 --run-time 60s \
+    --csv /results/escenario-b --csv-full-history --only-summary \
+  | tee evidencias/fase6/resultados/escenario-b-consola.txt
+) &
+fase6_pid=$!
+
+sleep 30
+echo "MICHAEL: detener mysql-node2 ahora"
 date --iso-8601=seconds
-docker stop mysql-node1
 ```
 
-Sirve para: retirar el primer escritor conservando ProxySQL activo.
-
-Resultado esperado: `mysql-node1` detenido. Reutilizar la consulta de
-hostgroups de Fase 3, punto 4; nodo1 debe pasar a HG40/`SHUNNED` y nodo2 debe
-permanecer escritor.
-
-> **CAPTURA F6-02:** hora, nodo1 detenido y detección de ProxySQL.
-
----
-
-## 3. Continuar las operaciones restantes sobre nodo2
-
-### Ejecuta: Byron
-
-```bash
-docker run --rm --network host --entrypoint sh \
-  -e MYSQL_PWD="$fase6_app_password" \
-  -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
-  -e DB_USER=app_user -e DB_SCHEMA=data_bugs \
-  -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 \
-  -e LOAD_MODE=mixed -e LOAD_LABEL=escenario-a-despues \
-  -v "$PWD/database/tests/load_phase6.sh:/load_phase6.sh:ro" \
-  mysql:8.4 /load_phase6.sh \
-  | tee evidencias/fase6/resultados/escenario-a-despues.txt
-```
-
-Sirve para: ejecutar las 100 operaciones restantes mediante nodo2.
-
-Resultado esperado: 100 intentadas, 100 exitosas y cero fallidas. Si ProxySQL
-aún está detectando la caída, puede aparecer alguna operación fallida; se
-registra como resultado real y no se oculta.
-
-Después recuperar nodo1 siguiendo Fase 3, puntos 7–8: encenderlo, ejecutar
-`START GROUP_REPLICATION` sin bootstrap y esperar tres `ONLINE`/GTID iguales.
-
-> **CAPTURA F6-03:** resumen posterior a la falla y nodo2 disponible.
-
----
-
-## 4. Repetir provocando la caída de nodo2
-
-No comenzar hasta confirmar otra vez tres miembros `ONLINE`.
-
-### 4.1 Byron ejecuta las primeras 100 operaciones
-
-```bash
-docker run --rm --network host --entrypoint sh \
-  -e MYSQL_PWD="$fase6_app_password" \
-  -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
-  -e DB_USER=app_user -e DB_SCHEMA=data_bugs \
-  -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 \
-  -e LOAD_MODE=mixed -e LOAD_LABEL=escenario-b-antes \
-  -v "$PWD/database/tests/load_phase6.sh:/load_phase6.sh:ro" \
-  mysql:8.4 /load_phase6.sh \
-  | tee evidencias/fase6/resultados/escenario-b-antes.txt
-```
-
-Esperado: 100 exitosas, cero fallidas.
+Sirve para: repetir exactamente la carga y señalar el instante del 50 %.
 
 ### 4.2 Michael detiene únicamente MySQL nodo2
 
 ```bash
-date --iso-8601=seconds
 docker stop mysql-node2
 ```
 
-Sirve para: retirar el segundo escritor sin apagar `tailscale-node2`.
+No debe detener `tailscale-node2`, porque se perdería también la ruta de red.
 
-### 4.3 Byron ejecuta las 100 operaciones restantes
+Resultado esperado: devuelve `mysql-node2` y nodo1 continúa como escritor.
+
+### 4.3 Byron espera y consulta resultados
 
 ```bash
-docker run --rm --network host --entrypoint sh \
-  -e MYSQL_PWD="$fase6_app_password" \
-  -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
-  -e DB_USER=app_user -e DB_SCHEMA=data_bugs \
-  -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 \
-  -e LOAD_MODE=mixed -e LOAD_LABEL=escenario-b-despues \
-  -v "$PWD/database/tests/load_phase6.sh:/load_phase6.sh:ro" \
-  mysql:8.4 /load_phase6.sh \
-  | tee evidencias/fase6/resultados/escenario-b-despues.txt
+wait "$fase6_pid"
+sed -n '1,12p' evidencias/fase6/resultados/escenario-b_stats.csv
+sed -n '1,12p' evidencias/fase6/resultados/escenario-b_failures.csv
 ```
 
-Resultado esperado: nodo1 `.39` atiende la carga restante. Después Michael
-recupera nodo2 siguiendo Fase 4, puntos 6–7: iniciar `mysql-node2`, ejecutar
-`START GROUP_REPLICATION` sin bootstrap y esperar `ONLINE`/GTID iguales.
+Resultado esperado: Locust completa la prueba y ProxySQL dirige las
+operaciones restantes a nodo1. Los fallos transitorios, si existen, quedan en
+el CSV.
 
-> **CAPTURA F6-04:** nodo2 caído, nodo1 escritor y resumen de carga.
+Michael recupera nodo2 siguiendo Fase 4, puntos 6–7: inicia `mysql-node2`,
+ejecuta `START GROUP_REPLICATION` sin bootstrap y espera `ONLINE`.
+
+> **CAPTURA F6-04:** nodo2 detenido, nodo1 escritor, resumen y recuperación.
 
 ---
 
-## 5. Apagar nodo1/nodo2 y generar carga de lectura en nodo3
+## 5. Apagar nodo1/nodo2 y generar solo lecturas en nodo3
 
-Reutilizar Fase 5, puntos 1–6: verificar sincronización, detener nodo1, detener
-nodo2, demostrar escrituras bloqueadas y conservar nodo3 `1/1`.
+Primero se reutiliza Fase 5, puntos 1–6: confirmar sincronización, detener
+nodo1 y nodo2, demostrar que no hay escritura y mantener nodo3 protegido `1/1`.
 
-### Ejecuta: Carlos desde la raíz de su repositorio
-
-Primero copia el script dentro del contenedor:
+### 5.1 Carlos construye Locust desde la raíz de su copia
 
 ```powershell
-docker cp .\database\tests\load_phase6.sh mysql-nodo3:/tmp/load_phase6.sh
+New-Item -ItemType Directory -Force .\evidencias\fase6\resultados | Out-Null
+docker build -t proyecto-db2-locust:2.32.10 .\database\load\locust
+docker run --rm proyecto-db2-locust:2.32.10 --version
 ```
 
-Después genera 100 operaciones exclusivamente de lectura:
+Resultado esperado: muestra `locust 2.32.10`.
+
+### 5.2 Carlos carga la contraseña de `app_user`
 
 ```powershell
-docker exec -e DB_HOST=127.0.0.1 -e DB_PORT=3306 -e DB_USER=root -e DB_SCHEMA=data_bugs -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 -e LOAD_MODE=read -e LOAD_LABEL=solo-lectura-nodo3 mysql-nodo3 sh /tmp/load_phase6.sh | Tee-Object -FilePath .\evidencias\fase6\resultados\solo-lectura-nodo3.txt
+$fase6Cred = Get-Credential -UserName app_user -Message "Contraseña de app_user"
 ```
 
-El script usa `MYSQL_ROOT_PASSWORD` ya presente dentro de nodo3; Carlos no
-escribe la contraseña.
+Sirve para: pedir el secreto sin escribirlo en el comando.
 
-Resultado esperado: 100 lecturas exitosas, cero fallidas y nodo3 continúa
-`read_only=1` / `super_read_only=1`.
+### 5.3 Carlos ejecuta 60 segundos de lectura directa en nodo3
 
-Después recuperar el clúster siguiendo Fase 5, puntos 7–10.
+```powershell
+docker run --rm --network container:mysql-nodo3 `
+  -e DB_HOST=127.0.0.1 -e DB_PORT=3306 `
+  -e DB_USER=app_user `
+  -e DB_PASSWORD="$($fase6Cred.GetNetworkCredential().Password)" `
+  -e DB_SCHEMA=data_bugs -e LOAD_MODE=read `
+  -v "${PWD}\evidencias\fase6\resultados:/results" `
+  proyecto-db2-locust:2.32.10 `
+  -f /mnt/locust/locustfile.py `
+  --headless --users 10 --spawn-rate 2 --run-time 60s `
+  --csv /results/solo-lectura-nodo3 --csv-full-history --only-summary
 
-> **CAPTURA F6-05:** resumen de lectura y nodo3 protegido `1/1`.
+$fase6Cred = $null
+```
+
+Sirve para: demostrar disponibilidad de lectura directa cuando no existe
+quórum de escritura. `LOAD_MODE=read` impide que Locust ejecute `UPDATE`.
+
+Resultado esperado: lecturas exitosas, cero escrituras y nodo3 continúa con
+`read_only=1`, `super_read_only=1`.
+
+Después se recupera el clúster siguiendo Fase 5, puntos 7–10.
+
+> **CAPTURA F6-05:** resumen de Locust y nodo3 protegido `1/1`.
 
 ---
 
 ## 6. Registrar el comportamiento de cada escenario
 
-### Ejecuta: Carlos con los archivos guardados
+### Ejecuta: Carlos
 
-| Escenario | Total | Antes de falla | Después de falla | Fallidas | Latencia promedio | Mín/máx | Disponibilidad |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Normal / nodo1 cae | 200 | | | | | | |
-| Normal / nodo2 cae | 200 | | | | | | |
-| Solo lectura nodo3 | 100 | 0 | | | | | |
+Completar con los CSV generados por Locust:
 
-Los valores salen directamente de los archivos de `resultados/`.
+| Escenario | Solicitudes | Fallidas | Latencia media | p95 | Disponibilidad |
+|---|---:|---:|---:|---:|---:|
+| Nodo1 cae al segundo 30 | | | | | |
+| Nodo2 cae al segundo 30 | | | | | |
+| Solo lectura en nodo3 | | | | | |
 
-Disponibilidad:
+La fila `Aggregated` de cada archivo `_stats.csv` contiene el total. La
+disponibilidad se calcula así:
 
 ```text
-operaciones exitosas / operaciones intentadas × 100
+(solicitudes - fallidas) / solicitudes × 100
 ```
 
-Los errores se copian literalmente; no se cuentan como éxito.
+La serie `_stats_history.csv` permite comparar la primera mitad con la segunda.
 
 ---
 
@@ -299,16 +309,16 @@ Los errores se copian literalmente; no se cuentan como éxito.
 
 El equipo responde en el informe:
 
-- ¿Cambió la latencia después de cada caída?
-- ¿Qué nodo atendió las operaciones restantes?
-- ¿Cuántas operaciones fallaron durante la detección del proxy?
-- ¿Fue mayor la latencia a través de Tailscale/DERP?
+- ¿Cuánto cambió la latencia tras cada caída?
+- ¿Cuántas operaciones fallaron durante la detección de ProxySQL?
+- ¿Qué escritor atendió la segunda mitad?
 - ¿Continuaron las lecturas con solo nodo3?
-- ¿Cuál fue la disponibilidad porcentual de cada escenario?
+- ¿Qué disponibilidad tuvo cada escenario?
+- ¿Qué muestran Prometheus y Grafana durante los mismos instantes?
 
-> **CAPTURA F6-06:** tabla final y comparación de escenarios.
+> **CAPTURA F6-06:** tabla final, CSV y paneles de monitoreo de Fase 7.
 
-Al terminar:
+Al terminar, Byron elimina la variable temporal:
 
 ```bash
 unset fase6_app_password
@@ -316,10 +326,11 @@ unset fase6_app_password
 
 ## Criterio de cierre
 
-- [ ] Se midieron operaciones intentadas, exitosas, fallidas y latencias.
-- [ ] Se provocó la caída de nodo1 al completar 100 de 200 operaciones.
-- [ ] Se repitió la prueba con nodo2.
-- [ ] Nodo3 atendió 100 lecturas directas y permaneció `1/1`.
+- [ ] Locust fue construido y su versión quedó evidenciada.
+- [ ] Se ejecutó carga continua y cayó nodo1 al segundo 30 de 60.
+- [ ] Se repitió con nodo2 sin detener su sidecar Tailscale.
+- [ ] Se probaron lecturas directas en nodo3 con ambos escritores apagados.
+- [ ] Se guardaron estadísticas, historial, fallos y excepciones en CSV.
+- [ ] Se compararon latencia, percentiles y disponibilidad.
 - [ ] Fase 7 complementó la prueba con Prometheus/Grafana.
 - [ ] El clúster terminó con tres miembros `ONLINE`.
-- [ ] Resultados y capturas quedaron asociados a la bitácora.

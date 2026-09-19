@@ -14,7 +14,7 @@ contingencia.
 | `node_exporter` | Uno junto a cada servidor | Publica CPU y memoria en `9100` |
 | Prometheus | Equipo de Carlos | Recolecta y conserva las métricas |
 | Grafana | Equipo de Carlos | Presenta el dashboard en `3000` |
-| Script de carga SQL | Equipo de Byron | Ejecuta `database/tests/load_phase6.sh` según Fase 6 |
+| Locust | Equipo de Byron | Genera la carga SQL y los CSV definidos en Fase 6 |
 
 No se instala ningún paquete en Debian, Ubuntu o Windows: se utilizan imágenes
 Docker. La carpeta base ya existe en `nodes/node3/monitoreo/`, pero esta fase
@@ -278,7 +278,7 @@ mysql_perf_schema_table_io_waits
 
 Si la métrica de latencia no aparece, revisar que el exporter tenga activado
 `--collect.perf_schema.tableiowaits`. Los tiempos producidos por
-`load_phase6.sh` se conservan además como medición de extremo a extremo.
+Los CSV de Locust se conservan además como medición de extremo a extremo.
 
 Resultado esperado: los paneles se separan por etiqueta `nodo` y no mezclan
 los tres servidores en una sola serie.
@@ -314,7 +314,7 @@ Antes de provocar fallos, confirmar simultáneamente:
 - `mysql_up=1` para nodo1, nodo2 y nodo3.
 - Targets `UP`.
 - Tres miembros `ONLINE` en Group Replication.
-- Actividad de consultas aumenta durante `load_phase6.sh`.
+- Actividad de consultas aumenta durante la ejecución de Locust.
 - CPU/memoria tienen valores y etiquetas por nodo.
 
 Sirve para: guardar una línea base con la cual comparar los fallos.
@@ -350,7 +350,7 @@ Esperado después del intervalo de scrape:
 - MySQL de nodo1 pasa a `0` o su target deja de responder.
 - Nodo2 continúa disponible.
 - Se observa el instante aproximado del cambio.
-- Las consultas continúan y el resultado de `load_phase6.sh` queda registrado.
+- Las consultas continúan y los resultados de Locust quedan registrados.
 
 > **CAPTURA F7-06:** caída de nodo1 visible durante carga.
 
@@ -412,7 +412,7 @@ Después recuperar el clúster con Fase 5, puntos 7–10.
 - [ ] Prometheus + Grafana están instalados y documentados.
 - [ ] Los seis targets aparecen `UP` en estado normal.
 - [ ] Dashboard muestra CPU, memoria, MySQL, disponibilidad y replicación.
-- [ ] Latencia de carga queda en Grafana o respaldada por `load_phase6.sh`.
+- [ ] Latencia de carga queda en Grafana y respaldada por los CSV de Locust.
 - [ ] Se capturaron normalidad, carga, falla, recuperación y contingencia.
 - [ ] Se documentó la limitación de Docker Desktop para métricas del host.
 - [ ] El clúster terminó con tres miembros `ONLINE` y nodo3 `1/1`.

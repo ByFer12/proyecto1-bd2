@@ -8,100 +8,184 @@ nodo3 cuando ambos escritores estén apagados.
 
 ## Herramienta seleccionada
 
-Se utilizará `mysqlslap`, cliente oficial incluido en la imagen `mysql:8.4`.
-No se instala nada en los sistemas operativos. La carga entra por ProxySQL
-(`6033`) y combina `SELECT` con un `UPDATE` sin cambio de valor, evitando
-alterar el dataset.
+Se utilizará el script versionado
+`database/tests/load_phase6.sh`, ejecutado dentro de la imagen `mysql:8.4`.
+El script utiliza el cliente `mysql`, que sí está presente en esa imagen, y no
+`mysqlslap`, que no viene incluido en la imagen utilizada por el proyecto.
 
-Responsables: Byron genera carga y observa ProxySQL; Michael controla nodo2;
-Carlos controla nodo3, evidencias y tabla de resultados.
+No se instala nada en los sistemas operativos. La carga normal entra por
+ProxySQL (`6033`) y el script:
+
+- ejecuta exactamente 100 operaciones por lote;
+- simula 10 clientes concurrentes;
+- alterna `SELECT` y `UPDATE` sin cambio de valor;
+- cuenta operaciones exitosas y fallidas;
+- calcula duración, latencia promedio/mínima/máxima y disponibilidad.
+
+### Por qué cumple el enunciado
+
+El enunciado recomienda k6, JMeter, Locust **o una herramienta equivalente**.
+El script es una herramienta equivalente y reproducible porque controla
+cantidad, concurrencia, tipo de operación, resultados y tiempos sobre el
+protocolo MySQL real.
+
+Cada escenario contiene dos lotes iguales:
+
+```text
+100 operaciones antes de la falla
+              ↓ 50 %
+         caída del nodo
+              ↓
+100 operaciones después de la falla
+```
+
+Prometheus y Grafana, configurados en Fase 7, complementan esta carga con CPU,
+memoria, disponibilidad, replicación y comportamiento durante la falla.
+
+### Por qué no se utiliza `mysqlslap`
+
+Aunque `mysqlslap` es una herramienta oficial de MySQL, la ejecución comprobó:
+
+```text
+/usr/local/bin/docker-entrypoint.sh: ... mysqlslap: not found
+```
+
+La imagen `mysql:8.4` de este proyecto contiene `mysql`, pero no ese binario.
+No se modifica el sistema ni se instala un paquete solo para ocultar el error;
+se utiliza el script verificable incluido en el repositorio.
+
+## Responsables
+
+| Tarea | Responsable inicial |
+|---|---|
+| Generar carga y observar ProxySQL | Byron |
+| Detener/recuperar nodo2 | Michael |
+| Operar nodo3, evidencias y tabla | Carlos |
+
+---
 
 ## Preparación común
 
-Ejecuta Byron desde la raíz:
+### Ejecuta: Byron desde la raíz del repositorio
 
 ```bash
 mkdir -p evidencias/fase6/resultados
-docker run --rm mysql:8.4 mysqlslap --version
+chmod +x database/tests/load_phase6.sh
+sh -n database/tests/load_phase6.sh
+docker run --rm mysql:8.4 mysql --version
 ```
 
-Esperado: versión MySQL 8.4. Después verifica tres nodos `ONLINE`, nodo3 `1/1`
-y ProxySQL saludable usando el semáforo de `avances/fase2.md`.
+Sirve para: preparar resultados, comprobar la sintaxis del generador y validar
+que el cliente `mysql` existe en la imagen.
 
-Byron carga la contraseña una vez en la terminal:
+Resultado esperado:
+
+- `sh -n` no imprime errores.
+- `mysql --version` muestra MySQL 8.4.
+
+Después confirmar mediante el semáforo de `avances/fase2.md`:
+
+- tres miembros `ONLINE`;
+- nodo3 con `read_only=1` y `super_read_only=1`;
+- ProxySQL activo;
+- las marcas temporales de Fase 5 ya fueron limpiadas.
+
+Byron carga una sola vez la contraseña privada de `app_user`:
 
 ```bash
 read -s 'fase6_app_password?Contraseña de app_user: '
 echo
 ```
 
-No se captura ni comparte esta variable. Al terminar toda la fase se ejecuta
+No se muestra ni se captura esta variable. Al terminar se ejecuta
 `unset fase6_app_password`.
 
 ---
 
 ## 1. Generar carga controlada sobre nodo1 y nodo2
 
-Con ambos escritores `ONLINE`, Byron ejecuta la primera mitad (100 operaciones):
+### Ejecuta: Byron
+
+Con ambos escritores `ONLINE`, ejecutar el primer lote de 100 operaciones:
 
 ```bash
 set -o pipefail
-docker run --rm --network host \
-  -e MYSQL_PWD="$fase6_app_password" mysql:8.4 \
-  mysqlslap -h127.0.0.1 -P6033 -uapp_user \
-  --create-schema=data_bugs --no-drop \
-  --concurrency=10 --iterations=1 --number-of-queries=100 \
-  --delimiter=';' \
-  --query="SELECT nombre,stock FROM producto WHERE producto_id=1;UPDATE producto SET stock=stock WHERE producto_id=1" \
+
+docker run --rm --network host --entrypoint sh \
+  -e MYSQL_PWD="$fase6_app_password" \
+  -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
+  -e DB_USER=app_user -e DB_SCHEMA=data_bugs \
+  -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 \
+  -e LOAD_MODE=mixed -e LOAD_LABEL=escenario-a-antes \
+  -v "$PWD/database/tests/load_phase6.sh:/load_phase6.sh:ro" \
+  mysql:8.4 /load_phase6.sh \
   | tee evidencias/fase6/resultados/escenario-a-antes.txt
 ```
 
-Sirve para: establecer latencia/tiempo base con nodo1 y nodo2 disponibles.
+Sirve para: establecer la línea base con nodo1 y nodo2 disponibles.
 
-Esperado: `Average number of seconds`, mínimo, máximo y clientes simulados, sin
-errores. ProxySQL puede repartir conexiones entre los escritores/lectores.
+Resultado esperado:
 
-> **CAPTURA F6-01:** resumen de la primera mitad y tres nodos `ONLINE`.
+```text
+operaciones_intentadas=100
+operaciones_exitosas=100
+operaciones_fallidas=0
+disponibilidad_porcentaje=100.00
+```
+
+También aparecen duración y latencias. Si hay fallos, detener la prueba y
+guardar los errores; todavía no provocar la caída.
+
+> **CAPTURA F6-01:** resumen completo y tres nodos `ONLINE`.
 
 ---
 
 ## 2. Al 50 %, provocar la caída de nodo1
 
-La prueba controlada se divide en dos lotes iguales; la frontera entre ambos
-representa aproximadamente el 50 %.
+La finalización del primer lote representa 100 de 200 operaciones, es decir,
+el 50 % del escenario.
 
-Ejecuta Byron:
+### Ejecuta: Byron
 
 ```bash
 date --iso-8601=seconds
 docker stop mysql-node1
 ```
 
-Esperado: `mysql-node1` detenido y `proxysql-db2` activo. Se reutiliza el
-procedimiento de observación de hostgroups de `avances/fase3.md`, punto 4.
+Sirve para: retirar el primer escritor conservando ProxySQL activo.
 
-> **CAPTURA F6-02:** nodo1 en HG40/SHUNNED y nodo2 escritor.
+Resultado esperado: `mysql-node1` detenido. Reutilizar la consulta de
+hostgroups de Fase 3, punto 4; nodo1 debe pasar a HG40/`SHUNNED` y nodo2 debe
+permanecer escritor.
+
+> **CAPTURA F6-02:** hora, nodo1 detenido y detección de ProxySQL.
 
 ---
 
-## 3. Verificar que las operaciones restantes continúen en nodo2
+## 3. Continuar las operaciones restantes sobre nodo2
 
-Byron ejecuta la segunda mitad con el mismo tamaño:
+### Ejecuta: Byron
 
 ```bash
-docker run --rm --network host \
-  -e MYSQL_PWD="$fase6_app_password" mysql:8.4 \
-  mysqlslap -h127.0.0.1 -P6033 -uapp_user \
-  --create-schema=data_bugs --no-drop \
-  --concurrency=10 --iterations=1 --number-of-queries=100 \
-  --delimiter=';' \
-  --query="SELECT nombre,stock FROM producto WHERE producto_id=1;UPDATE producto SET stock=stock WHERE producto_id=1" \
+docker run --rm --network host --entrypoint sh \
+  -e MYSQL_PWD="$fase6_app_password" \
+  -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
+  -e DB_USER=app_user -e DB_SCHEMA=data_bugs \
+  -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 \
+  -e LOAD_MODE=mixed -e LOAD_LABEL=escenario-a-despues \
+  -v "$PWD/database/tests/load_phase6.sh:/load_phase6.sh:ro" \
+  mysql:8.4 /load_phase6.sh \
   | tee evidencias/fase6/resultados/escenario-a-despues.txt
 ```
 
-Esperado: el lote termina mediante nodo2 `.24`. Se registran operaciones
-exitosas/fallidas y latencia. Después se recupera nodo1 siguiendo Fase 3,
-puntos 7–8, hasta volver a tres `ONLINE`.
+Sirve para: ejecutar las 100 operaciones restantes mediante nodo2.
+
+Resultado esperado: 100 intentadas, 100 exitosas y cero fallidas. Si ProxySQL
+aún está detectando la caída, puede aparecer alguna operación fallida; se
+registra como resultado real y no se oculta.
+
+Después recuperar nodo1 siguiendo Fase 3, puntos 7–8: encenderlo, ejecutar
+`START GROUP_REPLICATION` sin bootstrap y esperar tres `ONLINE`/GTID iguales.
 
 > **CAPTURA F6-03:** resumen posterior a la falla y nodo2 disponible.
 
@@ -109,45 +193,50 @@ puntos 7–8, hasta volver a tres `ONLINE`.
 
 ## 4. Repetir provocando la caída de nodo2
 
-Primero confirmar otra vez tres `ONLINE`. Byron ejecuta el lote previo:
+No comenzar hasta confirmar otra vez tres miembros `ONLINE`.
+
+### 4.1 Byron ejecuta las primeras 100 operaciones
 
 ```bash
-docker run --rm --network host \
-  -e MYSQL_PWD="$fase6_app_password" mysql:8.4 \
-  mysqlslap -h127.0.0.1 -P6033 -uapp_user \
-  --create-schema=data_bugs --no-drop \
-  --concurrency=10 --iterations=1 --number-of-queries=100 \
-  --delimiter=';' \
-  --query="SELECT nombre,stock FROM producto WHERE producto_id=1;UPDATE producto SET stock=stock WHERE producto_id=1" \
+docker run --rm --network host --entrypoint sh \
+  -e MYSQL_PWD="$fase6_app_password" \
+  -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
+  -e DB_USER=app_user -e DB_SCHEMA=data_bugs \
+  -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 \
+  -e LOAD_MODE=mixed -e LOAD_LABEL=escenario-b-antes \
+  -v "$PWD/database/tests/load_phase6.sh:/load_phase6.sh:ro" \
+  mysql:8.4 /load_phase6.sh \
   | tee evidencias/fase6/resultados/escenario-b-antes.txt
 ```
 
-Esperado: 100 operaciones completadas antes de la falla, sin errores.
+Esperado: 100 exitosas, cero fallidas.
 
-Michael registra la hora y detiene únicamente MySQL:
+### 4.2 Michael detiene únicamente MySQL nodo2
 
 ```bash
 date --iso-8601=seconds
 docker stop mysql-node2
 ```
 
-Byron repite 100 operaciones y guarda:
+Sirve para: retirar el segundo escritor sin apagar `tailscale-node2`.
+
+### 4.3 Byron ejecuta las 100 operaciones restantes
 
 ```bash
-docker run --rm --network host \
-  -e MYSQL_PWD="$fase6_app_password" mysql:8.4 \
-  mysqlslap -h127.0.0.1 -P6033 -uapp_user \
-  --create-schema=data_bugs --no-drop \
-  --concurrency=10 --iterations=1 --number-of-queries=100 \
-  --delimiter=';' \
-  --query="SELECT nombre,stock FROM producto WHERE producto_id=1;UPDATE producto SET stock=stock WHERE producto_id=1" \
+docker run --rm --network host --entrypoint sh \
+  -e MYSQL_PWD="$fase6_app_password" \
+  -e DB_HOST=127.0.0.1 -e DB_PORT=6033 \
+  -e DB_USER=app_user -e DB_SCHEMA=data_bugs \
+  -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 \
+  -e LOAD_MODE=mixed -e LOAD_LABEL=escenario-b-despues \
+  -v "$PWD/database/tests/load_phase6.sh:/load_phase6.sh:ro" \
+  mysql:8.4 /load_phase6.sh \
   | tee evidencias/fase6/resultados/escenario-b-despues.txt
 ```
 
-Esperado: segundo lote atendido por nodo1 `.39`. Después Michael recupera
-nodo2 siguiendo Fase 4, puntos 6–7: iniciar `mysql-node2`, esperar que MySQL
-responda, ejecutar `START GROUP_REPLICATION` sin bootstrap y comprobar
-`ONLINE`/GTID iguales.
+Resultado esperado: nodo1 `.39` atiende la carga restante. Después Michael
+recupera nodo2 siguiendo Fase 4, puntos 6–7: iniciar `mysql-node2`, ejecutar
+`START GROUP_REPLICATION` sin bootstrap y esperar `ONLINE`/GTID iguales.
 
 > **CAPTURA F6-04:** nodo2 caído, nodo1 escritor y resumen de carga.
 
@@ -158,28 +247,43 @@ responda, ejecutar `START GROUP_REPLICATION` sin bootstrap y comprobar
 Reutilizar Fase 5, puntos 1–6: verificar sincronización, detener nodo1, detener
 nodo2, demostrar escrituras bloqueadas y conservar nodo3 `1/1`.
 
-Carlos ejecuta dentro del contenedor una carga exclusivamente de lectura:
+### Ejecuta: Carlos desde la raíz de su repositorio
+
+Primero copia el script dentro del contenedor:
 
 ```powershell
-docker exec mysql-nodo3 sh -c 'mysqlslap -h127.0.0.1 -P3306 -uroot -p"$MYSQL_ROOT_PASSWORD" --create-schema=data_bugs --no-drop --concurrency=10 --iterations=1 --number-of-queries=100 --query="SELECT nombre,stock FROM producto ORDER BY producto_id"'
+docker cp .\database\tests\load_phase6.sh mysql-nodo3:/tmp/load_phase6.sh
 ```
 
-Esperado: 100 consultas de lectura atendidas; ninguna escritura habilitada.
-Después se recupera el clúster siguiendo Fase 5, puntos 7–10.
+Después genera 100 operaciones exclusivamente de lectura:
 
-> **CAPTURA F6-05:** resumen de lectura y nodo3 `read_only=1`.
+```powershell
+docker exec -e DB_HOST=127.0.0.1 -e DB_PORT=3306 -e DB_USER=root -e DB_SCHEMA=data_bugs -e LOAD_TOTAL=100 -e LOAD_CONCURRENCY=10 -e LOAD_MODE=read -e LOAD_LABEL=solo-lectura-nodo3 mysql-nodo3 sh /tmp/load_phase6.sh | Tee-Object -FilePath .\evidencias\fase6\resultados\solo-lectura-nodo3.txt
+```
+
+El script usa `MYSQL_ROOT_PASSWORD` ya presente dentro de nodo3; Carlos no
+escribe la contraseña.
+
+Resultado esperado: 100 lecturas exitosas, cero fallidas y nodo3 continúa
+`read_only=1` / `super_read_only=1`.
+
+Después recuperar el clúster siguiendo Fase 5, puntos 7–10.
+
+> **CAPTURA F6-05:** resumen de lectura y nodo3 protegido `1/1`.
 
 ---
 
 ## 6. Registrar el comportamiento de cada escenario
 
-Carlos completa una fila por lote:
+### Ejecuta: Carlos con los archivos guardados
 
-| Escenario | Total | Antes de falla | Después de falla | Fallidas | Tiempo promedio | Latencia mín/máx | Disponibilidad |
+| Escenario | Total | Antes de falla | Después de falla | Fallidas | Latencia promedio | Mín/máx | Disponibilidad |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| Normal / nodo1 cae | 200 | 100 | 100 | | | | |
-| Normal / nodo2 cae | 200 | 100 | 100 | | | | |
-| Solo lectura nodo3 | 100 | 0 | 100 lecturas | | | | |
+| Normal / nodo1 cae | 200 | | | | | | |
+| Normal / nodo2 cae | 200 | | | | | | |
+| Solo lectura nodo3 | 100 | 0 | | | | | |
+
+Los valores salen directamente de los archivos de `resultados/`.
 
 Disponibilidad:
 
@@ -187,7 +291,7 @@ Disponibilidad:
 operaciones exitosas / operaciones intentadas × 100
 ```
 
-Los errores se copian literalmente; no se ocultan ni se cuentan como éxito.
+Los errores se copian literalmente; no se cuentan como éxito.
 
 ---
 
@@ -195,14 +299,14 @@ Los errores se copian literalmente; no se ocultan ni se cuentan como éxito.
 
 El equipo responde en el informe:
 
-- ¿Cambió el promedio después de cada caída?
+- ¿Cambió la latencia después de cada caída?
 - ¿Qué nodo atendió las operaciones restantes?
 - ¿Cuántas operaciones fallaron durante la detección del proxy?
-- ¿Fue mayor la latencia a través de DERP/Tailscale?
+- ¿Fue mayor la latencia a través de Tailscale/DERP?
 - ¿Continuaron las lecturas con solo nodo3?
 - ¿Cuál fue la disponibilidad porcentual de cada escenario?
 
-> **CAPTURA F6-06:** tabla final y comparación de los tres escenarios.
+> **CAPTURA F6-06:** tabla final y comparación de escenarios.
 
 Al terminar:
 
@@ -212,9 +316,10 @@ unset fase6_app_password
 
 ## Criterio de cierre
 
-- [ ] Se midieron totales, éxitos, fallos y tiempos.
-- [ ] Se provocó la caída de nodo1 aproximadamente al 50 %.
-- [ ] Se repitió con nodo2.
-- [ ] Nodo3 atendió carga directa únicamente de lectura.
-- [ ] El clúster terminó restaurado con tres `ONLINE`.
+- [ ] Se midieron operaciones intentadas, exitosas, fallidas y latencias.
+- [ ] Se provocó la caída de nodo1 al completar 100 de 200 operaciones.
+- [ ] Se repitió la prueba con nodo2.
+- [ ] Nodo3 atendió 100 lecturas directas y permaneció `1/1`.
+- [ ] Fase 7 complementó la prueba con Prometheus/Grafana.
+- [ ] El clúster terminó con tres miembros `ONLINE`.
 - [ ] Resultados y capturas quedaron asociados a la bitácora.
